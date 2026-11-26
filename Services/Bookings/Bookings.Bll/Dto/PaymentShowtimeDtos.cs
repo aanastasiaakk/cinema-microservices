@@ -5,7 +5,10 @@ namespace Bookings.Bll.Dto;
 /// <summary>Оплата бронювання (вхід). Idempotency-ключ передається заголовком Idempotency-Key.</summary>
 public sealed class PayBookingDto
 {
-    [Range(typeof(decimal), "0.01", "100000")]
+    // Межі задано рядками, тому їх треба розбирати в InvariantCulture: інакше в культурі uk-UA
+    // (десятковий роздільник ",") "0.01" не розбирається і запит падає з 500 замість 400.
+    [Range(typeof(decimal), "0.01", "100000",
+        ParseLimitsInInvariantCulture = true, ConvertValueInInvariantCulture = true)]
     public decimal Amount { get; set; }
 
     [Required, RegularExpression("^(Card|Cash|ApplePay|GooglePay)$")]
