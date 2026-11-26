@@ -1,0 +1,47 @@
+### Запити до Bookings API (Rider / VS Code REST Client). Адресу візьміть з Aspire Dashboard.
+@api = http://localhost:5080
+
+### Сеанси на 90 днів уперед
+GET {{api}}/api/showtimes?days=365
+
+### Зайняті місця сеансу
+GET {{api}}/api/showtimes/1/seats
+
+### Створити клієнта (спецсимвол в імені — без помилок SQL)
+POST {{api}}/api/customers
+Content-Type: application/json
+
+{ "email": "conan.obrien@example.com", "fullName": "Conan O'Brien", "phone": "+380501234567" }
+
+### Неіснуючий клієнт -> 404 ProblemDetails
+GET {{api}}/api/customers/999999
+
+### Створити бронювання з 2 квитками (транзакція: Bookings + BookingDetails + Tickets)
+POST {{api}}/api/bookings
+Content-Type: application/json
+
+{ "customerId": 1, "channel": "Web",
+  "tickets": [ { "showtimeId": 4, "seatRow": 9, "seatNumber": 1, "ticketType": "Adult" },
+               { "showtimeId": 4, "seatRow": 9, "seatNumber": 2, "ticketType": "Student" } ] }
+
+### Те саме місце ще раз -> 409, бронювання повністю відкочується
+POST {{api}}/api/bookings
+Content-Type: application/json
+
+{ "customerId": 1, "tickets": [ { "showtimeId": 4, "seatRow": 9, "seatNumber": 1 } ] }
+
+### Передати на оплату (Created -> AwaitingPayment) -> 204. Id — з відповіді створення бронювання
+POST {{api}}/api/bookings/5/submit
+
+### Оплатити (Payments + статус Paid в одній транзакції) -> 201; повтор з тим самим ключем -> 200
+POST {{api}}/api/bookings/5/payments
+Content-Type: application/json
+Idempotency-Key: pay-5-001
+
+{ "amount": 450.00, "method": "Card" }
+
+### Скасувати оплачене -> 409 (Invalid status transition: Paid -> Cancelled)
+POST {{api}}/api/bookings/1/cancel
+Content-Type: application/json
+
+{ "reason": "test" }

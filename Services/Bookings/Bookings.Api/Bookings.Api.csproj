@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <!-- Web/API: контролери, middleware, хост. Бачить лише Bll (Api -> Bll -> Dal). -->
+  <PropertyGroup>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);1591</NoWarn>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Serilog.AspNetCore" Version="10.0.0" />
+    <PackageReference Include="Swashbuckle.AspNetCore" Version="10.3.1" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Bookings.Bll\Bookings.Bll.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- SQL-скрипти Лаб. 01 (db/p1) копіюються у вихідну папку для ініціалізації порожньої БД
+         в контейнері Aspire. Файли НЕ дублюються в репозиторії — це посилання. -->
+    <Content Include="..\..\..\db\p1\schema.sql;..\..\..\db\p1\procedures.sql;..\..\..\db\p1\seed.sql"
+             Link="db\p1\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>

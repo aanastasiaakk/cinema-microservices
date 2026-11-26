@@ -1,0 +1,3 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Domain: моделі, константи, доменні винятки. Без залежностей. Підключають і Dal, і Bll. -->
+</Project>
