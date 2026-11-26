@@ -1,0 +1,70 @@
+// Проєкт №2 · CinemaCatalog · імпорт у https://dbdiagram.io
+Project CinemaCatalog { database_type: 'SQLServer' }
+
+Table Genres {
+  Id int [pk, increment]
+  Name nvarchar(50) [not null, unique]
+  Slug varchar(50) [not null, unique]
+}
+
+Table Movies {
+  Id bigint [pk, increment]
+  Title nvarchar(200) [not null]
+  ReleaseYear smallint [not null]
+  DurationMin smallint [not null]
+  AgeRating varchar(5) [not null, default: '0+']
+  BasePrice decimal(10,2) [not null, note: 'CHECK > 0']
+  IsActive bit [not null, default: 1]
+  AverageRating decimal(3,2) [note: 'копія з Reviews (MongoDB), події']
+  ReviewsCount int [not null, default: 0]
+  CreatedAt datetime2 [not null]
+  UpdatedAt datetime2
+  RowVersion rowversion [not null]
+  Indexes {
+    (Title, ReleaseYear) [unique, name: 'IX_Movies_Title_ReleaseYear']
+    AverageRating [name: 'IX_Movies_Active_Rating', note: 'афіша; WHERE IsActive = 1']
+  }
+}
+
+Table MovieDetails {
+  MovieId bigint [pk, ref: - Movies.Id, note: '1:1, CASCADE']
+  Description nvarchar(2000) [not null]
+  Director nvarchar(200)
+  Country nvarchar(100)
+  TrailerUrl nvarchar(500)
+  PosterUrl nvarchar(500)
+}
+
+Table MovieGenres {
+  MovieId bigint [not null, ref: > Movies.Id, note: 'CASCADE']
+  GenreId int [not null, ref: > Genres.Id, note: 'NO ACTION']
+  AddedAt datetime2 [not null, default: `SYSUTCDATETIME()`, note: 'власне поле M:N']
+  IsPrimary bit [not null, default: 0, note: 'власне поле M:N']
+  Indexes {
+    (MovieId, GenreId) [pk]
+    GenreId [name: 'IX_MovieGenres_GenreId', note: 'фільми жанру']
+  }
+}
+
+Table Halls {
+  Id int [pk, increment]
+  Name nvarchar(100) [not null, unique]
+  Rows tinyint [not null]
+  SeatsPerRow tinyint [not null]
+  Format varchar(10) [not null, default: '2D']
+  Capacity int [note: 'обчислюване Rows * SeatsPerRow']
+}
+
+Table Showtimes {
+  Id bigint [pk, increment]
+  MovieId bigint [not null, ref: > Movies.Id]
+  HallId int [not null, ref: > Halls.Id]
+  StartsAt datetime2 [not null]
+  Price decimal(10,2) [not null]
+  Language char(2) [not null, default: 'uk']
+  IsCancelled bit [not null, default: 0]
+  Indexes {
+    (HallId, StartsAt) [unique, name: 'IX_Showtimes_HallId_StartsAt']
+    (MovieId, StartsAt) [name: 'IX_Showtimes_MovieId_StartsAt', note: 'розклад фільму']
+  }
+}

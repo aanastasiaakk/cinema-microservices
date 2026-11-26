@@ -1,0 +1,83 @@
+// Проєкт №1 · CinemaBooking · імпорт у https://dbdiagram.io
+Project CinemaBooking { database_type: 'SQLServer' }
+
+Table Customers {
+  Id bigint [pk, increment]
+  Email nvarchar(256) [not null, unique]
+  FullName nvarchar(200) [not null]
+  Phone nvarchar(20)
+  CreatedAt datetime2 [not null, default: `SYSUTCDATETIME()`]
+  CreatedBy nvarchar(100)
+  UpdatedAt datetime2
+  UpdatedBy nvarchar(100)
+  IsDeleted bit [not null, default: 0]
+  RowVersion rowversion [not null]
+}
+
+Table Bookings {
+  Id bigint [pk, increment]
+  CustomerId bigint [not null, ref: > Customers.Id, note: '1:N, ON DELETE NO ACTION']
+  BookingCode char(8) [not null, unique]
+  Status nvarchar(30) [not null, default: 'Created', note: 'CHECK: Created/AwaitingPayment/Paid/CheckedIn/Cancelled']
+  TotalAmount decimal(10,2) [not null, default: 0]
+  BookedAt datetime2 [not null]
+  CreatedAt datetime2 [not null]
+  CreatedBy nvarchar(100)
+  UpdatedAt datetime2
+  UpdatedBy nvarchar(100)
+  IsDeleted bit [not null, default: 0]
+  RowVersion rowversion [not null]
+  Indexes {
+    (CustomerId, Status, BookedAt) [name: 'IX_Bookings_Customer_Status_Active', note: 'мої бронювання; WHERE IsDeleted = 0']
+    BookedAt [name: 'IX_Bookings_AwaitingPayment_BookedAt', note: 'автоскасування; WHERE Status = AwaitingPayment']
+  }
+}
+
+Table BookingDetails {
+  BookingId bigint [pk, ref: - Bookings.Id, note: '1:1, ON DELETE CASCADE']
+  Channel nvarchar(20) [not null, default: 'Web']
+  ContactPhone nvarchar(20)
+  Comment nvarchar(500)
+  CancelReason nvarchar(300)
+}
+
+Table Showtimes {
+  Id bigint [pk, note: 'той самий Id, що в CinemaCatalog (без FK)']
+  MovieId bigint [not null, note: 'Id з Каталогу, БЕЗ FK']
+  MovieTitle nvarchar(200) [not null, note: 'копія, оновлюється подіями']
+  HallName nvarchar(100) [not null]
+  StartsAt datetime2 [not null]
+  BasePrice decimal(10,2) [not null]
+  Capacity int [not null]
+  SyncedAt datetime2 [not null]
+}
+
+Table Tickets {
+  BookingId bigint [not null, ref: > Bookings.Id, note: 'CASCADE']
+  ShowtimeId bigint [not null, ref: > Showtimes.Id, note: 'NO ACTION']
+  SeatRow tinyint [not null]
+  SeatNumber tinyint [not null]
+  TicketType nvarchar(20) [not null, default: 'Adult']
+  MovieTitle nvarchar(200) [not null, note: 'ЗНІМОК, не оновлюється']
+  StartsAt datetime2 [not null, note: 'ЗНІМОК']
+  UnitPrice decimal(10,2) [not null, note: 'ЗНІМОК']
+  Indexes {
+    (BookingId, ShowtimeId, SeatRow, SeatNumber) [pk]
+    (ShowtimeId, SeatRow, SeatNumber) [name: 'IX_Tickets_Showtime_Seat', note: 'зайняті місця на сеансі']
+  }
+}
+
+Table Payments {
+  Id bigint [pk, increment]
+  BookingId bigint [not null, ref: > Bookings.Id, note: '1:N']
+  Amount decimal(10,2) [not null]
+  Method nvarchar(20) [not null]
+  Status nvarchar(20) [not null, default: 'Pending']
+  ProviderTxnId nvarchar(100) [unique]
+  PaidAt datetime2
+  CreatedAt datetime2 [not null]
+  CreatedBy nvarchar(100)
+  UpdatedAt datetime2
+  UpdatedBy nvarchar(100)
+  RowVersion rowversion [not null]
+}

@@ -1,0 +1,27 @@
+# Локальні СУБД для Лаб. 01 (і наступних лаб).
+# Запуск з кореня репозиторію:  docker compose -f db/docker-compose.yml up -d
+services:
+  mssql:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    container_name: cinema-mssql
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_SA_PASSWORD: "${MSSQL_SA_PASSWORD:-Your_strong_Passw0rd}"   # змініть для себе
+    ports:
+      - "1433:1433"
+    volumes:
+      - ./:/db:ro          # скрипти доступні всередині контейнера як /db/p1, /db/p2
+      - mssql-data:/var/opt/mssql
+
+  mongo:
+    image: mongo:7
+    container_name: cinema-mongo
+    ports:
+      - "27017:27017"
+    volumes:
+      - ./:/db:ro          # скрипти доступні як /db/p3
+      - mongo-data:/data/db
+
+volumes:
+  mssql-data:
+  mongo-data:
