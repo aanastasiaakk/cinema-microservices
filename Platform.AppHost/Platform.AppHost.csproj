@@ -8,5 +8,6 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\Services\Bookings\Bookings.Api\Bookings.Api.csproj" />
+    <ProjectReference Include="..\Services\Catalog\Catalog.Api\Catalog.Api.csproj" />
   </ItemGroup>
 </Project>

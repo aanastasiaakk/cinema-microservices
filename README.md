@@ -4,6 +4,7 @@
 
 * **Лаб. 01:** проєктування баз даних для мікросервісної архітектури (`docs/`, `db/`)
 * **Лаб. 02:** мікросервіс бронювань `Services/Bookings`: тришарова архітектура (Api → Bll → Dal) на ADO.NET та Dapper, запуск через .NET Aspire (`Platform.AppHost`)
+* **Лаб. 03:** мікросервіс каталогу `Services/Catalog`: тришарова архітектура на EF Core (Code First, Fluent API, міграції, Generic Repository + Unit of Work, Specification pattern, FluentValidation, Serilog)
 
 ## Швидкий старт: уся платформа однією командою (.NET Aspire)
 
@@ -17,7 +18,7 @@ dotnet run --project Platform.AppHost
 
 У Rider: оберіть конфігурацію запуску **Platform.AppHost** → Run.
 
-Aspire піднімає контейнер **SQL Server** (ресурс `sql`, база `CinemaBooking`) і **Bookings API** (ресурс `bookings-api`). API стартує лише після того, як база готова (`WaitFor`), і при першому запуску застосовує до порожньої бази скрипти Лаб. 01 `db/p1/schema.sql → procedures.sql → seed.sql` (вони ідемпотентні). Посилання на **Aspire Dashboard** друкується в консолі. У Dashboard обидва ресурси мають бути в статусі **Running**; клікніть адресу `bookings-api`, щоб відкрити **Swagger** (`/swagger`).
+Aspire піднімає контейнер **SQL Server** (ресурс `sql`, бази `CinemaBooking` і `CinemaCatalog`), **Bookings API** (ресурс `bookings-api`) і **Catalog API** (ресурс `catalog-api`, Лаб. 03: схему створює міграція EF Core, див. [розділ 12](#12-лаб-03-мікросервіс-каталогу-на-ef-core-servicescatalog)). API стартує лише після того, як база готова (`WaitFor`), і при першому запуску застосовує до порожньої бази скрипти Лаб. 01 `db/p1/schema.sql → procedures.sql → seed.sql` (вони ідемпотентні). Посилання на **Aspire Dashboard** друкується в консолі. У Dashboard обидва ресурси мають бути в статусі **Running**; клікніть адресу `bookings-api`, щоб відкрити **Swagger** (`/swagger`).
 
 Детально про сервіс, схему рішення й приклади запитів див. [розділ 11](#11-лаб-02-мікросервіс-бронювань-servicesbookings).
 
@@ -66,6 +67,12 @@ Services/
     Bookings.Dal/          інтерфейси репозиторіїв, ADO.NET/Dapper-реалізації, Unit of Work
     Bookings.Domain/       моделі, доменні винятки
     Bookings.Tests/        unit, integration і API-тести
+  Catalog/                 Проєкт №2: мікросервіс каталогу (EF Core Code First)
+    Catalog.Api/           контролери, middleware, Program.cs, appsettings*.json, Dockerfile
+    Catalog.Bll/           сервіси, DTO, профілі AutoMapper, Validation/, Specifications/, Caching/
+    Catalog.Dal/           DbContext, Configurations/, Migrations/, Repositories/, Seeding/, Unit of Work
+    Catalog.Domain/        сутності з бізнес-правилами, доменні винятки
+    Catalog.Tests/         unit-тести (домен, специфікації, валідатори) і integration-тести на SQL Server
 docs/
   contexts.md              межі контекстів, агрегати, власники даних
   erd.md                   ERD Проєктів №1 і №2 (+ erd-p1.png, erd-p2.png, cross-db-links.png)
@@ -189,7 +196,7 @@ Created ──► AwaitingPayment ──► Paid ──► CheckedIn
 
 Унікальні поля: `Genres.Name`, `Genres.Slug`, `Movies(Title, ReleaseYear)`, `Halls.Name`, `Showtimes(HallId, StartsAt)` (у залі не може бути двох сеансів одночасно), один основний жанр на фільм (фільтрований unique). CHECK: ціни > 0, рік, тривалість, віковий рейтинг, формат залу, мова. Індекси під запити: афіша за рейтингом, розклад фільму, фільми жанру.
 
-**Готовність до міграцій:** іменування PK/FK/IX у конвенціях EF Core. У Лаб. 03 модель описується Fluent API, seed-дані задаються через `HasData`, а схема створюється й надалі змінюється міграціями (`dotnet ef migrations add InitialCatalog`, `dotnet ef database update`). `db/p2/schema.sql` це спроєктована цільова схема для перевірки.
+**Готовність до міграцій:** іменування PK/FK/IX у конвенціях EF Core. У Лаб. 03 модель описується Fluent API, seed-дані задаються через `HasData`, а схема створюється й надалі змінюється міграціями (`dotnet ef migrations add InitialCreate`, `dotnet ef database update`, реалізовано в [розділі 12](#12-лаб-03-мікросервіс-каталогу-на-ef-core-servicescatalog)). `db/p2/schema.sql` це спроєктована цільова схема для перевірки.
 
 ## 8. Проєкт №3: що всередині
 
@@ -395,3 +402,184 @@ BOOKINGS_TEST_DB="Server=localhost,1433;Database=CinemaBooking;User Id=sa;Passwo
 
 * `main` стабільна гілка, `develop` інтеграційна, `feature/<задача>` для окремих задач, `lab-NN` для здачі лабораторної.
 * Зміни зливаються через Pull Request з описом; повідомлення комітів у форматі `<область>: <що зроблено>` (наприклад, `dal: add Unit of Work with shared transaction`).
+
+## 12. Лаб. 03: мікросервіс каталогу на EF Core (Services/Catalog)
+
+Реляційна база Проєкту №2 з Лаб. 01 (`CinemaCatalog`) тепер описана в коді (Code First). Схему створює міграція EF Core, а не скрипт `db/p2/schema.sql`. Структура рішення та сама, що в Лаб. 02 (Api → Bll → Dal → Domain), але доступ до даних побудовано на EF Core: моделі, Fluent API, міграції, LINQ to Entities.
+
+### 12.1. Схема рішення
+
+```mermaid
+flowchart LR
+    Client[Swagger / curl] --> Api
+    subgraph Catalog.Api
+      Api[Контролери] --> V[FluentValidation\n(явний виклик)]
+      EH[GlobalExceptionHandler\nProblemDetails]
+    end
+    Api --> Bll
+    subgraph Catalog.Bll
+      Bll[MovieService · GenreService · ShowtimeService] --> Spec[Specifications]
+      Bll --> Cache[Caching/ IMemoryCache]
+      Bll --> AM[AutoMapper профілі]
+    end
+    Bll --> UoW
+    subgraph Catalog.Dal
+      UoW[UnitOfWork\nSaveChangesAsync] --> R[Movie / Genre / MovieGenre\nHall / Showtime репозиторії]
+      R --> G[GenericRepository&lt;T&gt;\nDbSet + WithSpecification]
+      G --> Ctx[CatalogDbContext\nApplyConfigurationsFromAssembly]
+    end
+    Ctx --> DB[(SQL Server\nCinemaCatalog)]
+    Domain[Catalog.Domain\nсутності + винятки] -.-> Bll
+    Domain -.-> Ctx
+```
+
+| Проєкт | Що всередині |
+|---|---|
+| `Catalog.Domain` | `Movie`, `MovieDetail` (1:1), `MovieGenre` (явна проміжна M:N з `AddedAt`, `IsPrimary`), `Genre`, `Hall`, `Showtime`; приватні setter-и, валідація в конструкторах, зміна стану лише методами (`ChangePrice`, `Deactivate`, `AddGenre`, `RemoveGenre`, `Cancel`…); винятки `DomainException`, `EntityNotFoundException`, `ConflictException`, `ValidationException` |
+| `Catalog.Dal` | `CatalogDbContext`, окремий `IEntityTypeConfiguration<T>` на кожну сутність у `Configurations/` (підключені одним `ApplyConfigurationsFromAssembly`), `Migrations/` (`InitialCreate` + знімок моделі + `InitialCreate.sql`), `GenericRepository<T>`, три специфічні репозиторії, `UnitOfWork`, `Seeding/DbInitializer` |
+| `Catalog.Bll` | сервіси, DTO, профілі AutoMapper, `Validation/` (FluentValidation), `Specifications/` (Ardalis.Specification), `Caching/` (кеш довідників) |
+| `Catalog.Api` | тонкі асинхронні контролери, `GlobalExceptionHandler`, `CorrelationIdMiddleware`, Serilog, Swagger, `Dockerfile` |
+| `Catalog.Tests` | unit-тести домену, специфікацій, валідаторів, AutoMapper; integration-тести на SQL Server (кількість SQL-запитів, ідемпотентний сідінг, пагінація в SQL) |
+
+### 12.2. Модель і Fluent API
+
+* **1:1** `Movie` ↔ `MovieDetail` (PK `MovieDetail.MovieId` є водночас FK, каскадне видалення).
+* **1:N** `Movie` → `Showtimes`, `Hall` → `Showtimes` (`Restrict`: фільм або зал із сеансами не видаляється).
+* **M:N** `Movie` ↔ `Genre` через **явну** сутність `MovieGenre`: складений ключ `(MovieId, GenreId)` і власні поля `AddedAt` та `IsPrimary`. Автоматичне M:N EF Core їх зберегти не дозволило б.
+* Довжини рядків, `decimal(18,2)` для цін, унікальні індекси (`Genres.Name`, `Genres.Slug`, `Movies(Title, ReleaseYear)`, `Halls.Name`, `Showtimes(HallId, StartsAt)`, один основний жанр на фільм через фільтрований unique), CHECK-обмеження (ціна > 0, рік, тривалість, рейтинг, формат залу, мова), `rowversion` у `Movies`, обчислюване `Halls.Capacity`.
+
+### 12.3. Міграції
+
+```bash
+dotnet tool install --global dotnet-ef        # один раз
+cd Services/Catalog
+
+# створити міграцію (уже створена: Catalog.Dal/Migrations/*_InitialCreate.cs)
+dotnet ef migrations add InitialCreate --project Catalog.Dal --startup-project Catalog.Api --output-dir Migrations
+
+# застосувати до БД з appsettings.json (або ConnectionStrings__CinemaCatalog=...)
+dotnet ef database update --project Catalog.Dal --startup-project Catalog.Api
+
+# SQL-скрипт міграції (у репозиторії: Catalog.Dal/Migrations/InitialCreate.sql, ідемпотентний)
+dotnet ef migrations script --idempotent --project Catalog.Dal --startup-project Catalog.Api -o Catalog.Dal/Migrations/InitialCreate.sql
+```
+
+Під Aspire нічого запускати вручну не потрібно: на старті `Catalog.Api` викликає `MigrateAsync()`, а потім сідінг.
+
+### 12.4. Сідінг (ідемпотентний)
+
+* **Модельний (`HasData`)**: довідники з фіксованими Id, тобто жанри (1–6) і зали (1–2). Ці записи потрапляють у міграцію.
+* **Програмний (`DbInitializer.SeedAsync`)** виконується після `MigrateAsync()` і вставляє фільми (з деталями й жанрами) та сеанси. Кожен запис перевіряється за природним ключем (`Title + ReleaseYear`, `HallId + StartsAt`), тому повторний запуск нічого не дублює, а в лозі з'являється `database already contains seed data`. На порожній БД Id фільмів 1–3 і сеансів 1–4 збігаються з Id, на які посилаються `CinemaBooking` і MongoDB.
+* Сідінг вмикається і вимикається налаштуваннями `Database:MigrateOnStartup` і `Database:SeedOnStartup`. У `appsettings.Production.json` значення `SeedOnStartup = false`.
+
+### 12.5. Репозиторії та Unit of Work
+
+| Репозиторій | Спосіб завантаження | Метод | SQL-запитів |
+|---|---|---|---|
+| `GenericRepository<T>` | `DbSet<T>`: `GetByIdAsync`, `GetAllAsync`, `AddAsync` (async), `Update`/`Delete` (лише стан у контексті), `ListAsync(spec)`, `CountAsync(spec)` через `WithSpecification` | | |
+| `MovieRepository` | **Eager Loading** (`Include` / `ThenInclude`): деталі, жанри, сеанси із залами | `GetWithDetailsAsync` | **1** |
+| `GenreRepository` | **Explicit Loading**: жанр, потім `Entry(genre).Collection(g => g.MovieGenres).Query().Include(mg => mg.Movie).LoadAsync()` | `GetWithMoviesAsync` | **2** |
+| `MovieGenreRepository` | **LINQ to Entities** через проміжну сутність і її власне поле `AddedAt` | `GetRecentlyAddedMoviesAsync`, `CountMoviesPerGenreAsync` | 1 |
+
+`UnitOfWork` містить усі репозиторії над одним `CatalogDbContext` (Scoped) і єдиний `SaveChangesAsync()`. Репозиторії самі нічого не зберігають. Сервіс викликає `SaveChangesAsync()` один раз наприкінці операції, і, наприклад, `Movies + MovieDetails + MovieGenres` записуються однією транзакцією.
+
+### 12.6. Пагінація, фільтрація, сортування, специфікації
+
+* Запит: `page` (з 1), `pageSize` (за замовчуванням 20, максимум 100), фільтри `search`, `genre`, `year`, `ageRating`, `minPrice`, `maxPrice`, `isActive`, сортування `sortBy` = `title | year | price | rating | createdAt` (інші поля дають 400) і `sortDir` = `asc | desc`.
+* Відповідь: `items`, `totalCount`, `page`, `pageSize`, `totalPages`, `hasNext`, `hasPrevious` у тілі. `totalCount` і `totalPages` дублюються в заголовках `X-Total-Count` і `X-Total-Pages`.
+* Фільтр, сортування та `Skip/Take` описані в специфікації `MoviesFilterSpec` (Ardalis.Specification). Репозиторій лише застосовує її (`WithSpecification`), і база повертає тільки потрібну сторінку (`OFFSET … FETCH`). `totalCount` той самий об'єкт рахує як `COUNT(*)` за критеріями (`evaluateCriteriaOnly`).
+* Друга специфікація `ShowtimesFilterSpec` (розклад: фільм, зал, період, скасовані, сортування `startsAt | price`) працює через той самий `GenericRepository` без змін у ньому.
+
+### 12.7. Валідація й помилки
+
+* **DataAnnotations** на DTO містять прості правила (`[Required]`, `[StringLength]`, `[Range]`). `[ApiController]` відхиляє некоректний запит з 400 ще до виклику сервісу.
+* **FluentValidation** містить складні правила в окремих класах (`Validation/Validators.cs`): рік ≤ поточний + 5, рейтинг зі списку, https-трейлер, унікальні жанри, основний жанр серед вибраних, дозволені поля сортування, `maxPrice ≥ minPrice`, сеанс у майбутньому. Валідатори зареєстровані `AddValidatorsFromAssemblyContaining<…>()` і викликаються явно в контролерах. Застарілий `AddFluentValidation` не використовується. Обидва види помилок повертаються як `ValidationProblemDetails` з переліком по полях.
+* **Правила з БД** перевіряє сервіс: дубль назви й року або назви жанру дає 409, зайнятий зал дає 409, неіснуючий жанр дає 400, неіснуючий фільм дає 404.
+* **`GlobalExceptionHandler`** (`IExceptionHandler` + `AddProblemDetails`) — єдиний обробник: `EntityNotFoundException` → 404, `ValidationException` → 400, `ConflictException` і `DomainException` → 409, конфлікт `rowversion` і порушення унікального індексу → 409, інше → 500. Виняток логується один раз саме тут. Stack trace додається лише в Development.
+
+### 12.8. Логування (Serilog)
+
+* Налаштування в `appsettings.json`: рівні (`Default: Information`, `Microsoft.EntityFrameworkCore.Database.Command: Information`, щоб у лозі були SQL-команди EF Core), sink-и `Console` і `File` (`logs/catalog-*.json`, компактний JSON).
+* Структуровані властивості: `CorrelationId` (заголовок `X-Correlation-Id`), `RequestPath`, `UserId`, `Service`, а також властивості повідомлень (`{MovieId}`, `{OldPrice}`, `{CacheKey}`…). `UseSerilogRequestLogging` пише один рядок на запит зі статусом і часом.
+* Перевірка Eager/Explicit: надішліть `GET /api/movies/1` із заголовком `X-Correlation-Id: eager` і `GET /api/genres/2` із `X-Correlation-Id: explicit`. У `logs/catalog-*.json` для першого буде один `Executed DbCommand`, для другого два.
+
+### 12.9. Ендпоінти
+
+| Метод | Маршрут | Успіх | Помилки |
+|---|---|---|---|
+| GET | `/api/movies?page&pageSize&search&genre&year&ageRating&minPrice&maxPrice&isActive&sortBy&sortDir` | 200 | 400 |
+| GET | `/api/movies/{id}` | 200 | 404 |
+| POST | `/api/movies` | 201 + `Location` | 400, 409 |
+| PUT | `/api/movies/{id}/price` | 204 | 400, 404, 409 |
+| POST | `/api/movies/{id}/deactivate`, `/activate` | 204 | 404, 409 |
+| POST / DELETE | `/api/movies/{id}/genres`, `/api/movies/{id}/genres/{genreId}` | 200 / 204 | 400, 404, 409 |
+| DELETE | `/api/movies/{id}` | 204 | 404, 409 |
+| GET | `/api/genres`, `/api/genres/{id}`, `/api/genres/{slug}/recent-movies?days`, `/api/genres/stats` | 200 | 404 |
+| POST | `/api/genres` | 201 + `Location` | 400, 409 |
+| GET | `/api/showtimes?movieId&hallId&from&to&includeCancelled&sortBy&sortDir&page&pageSize`, `/api/showtimes/{id}`, `/api/halls` | 200 | 400, 404 |
+| POST | `/api/showtimes` | 201 + `Location` | 400, 404, 409 |
+| POST | `/api/showtimes/{id}/cancel` | 204 | 404, 409 |
+
+### 12.10. Приклади запитів (curl)
+
+```bash
+CAT=http://localhost:5090     # або адреса catalog-api з Aspire Dashboard
+
+# пагінація + сортування: totalCount = усі фільми в БД, а не на сторінці
+curl -i "$CAT/api/movies?page=2&pageSize=5&sortBy=price&sortDir=desc"
+curl "$CAT/api/movies?genre=adventure&minPrice=100&maxPrice=200"
+
+# eager (1 SQL) і explicit (2 SQL)
+curl -H "X-Correlation-Id: eager" "$CAT/api/movies/1"
+curl -H "X-Correlation-Id: explicit" "$CAT/api/genres/2"
+
+# M:N через проміжну сутність і її поле AddedAt
+curl "$CAT/api/genres/adventure/recent-movies?days=3650"
+
+# створення -> 201 + Location; повтор -> 409
+curl -i -X POST "$CAT/api/movies" -H "Content-Type: application/json" -d '{
+  "title": "Будинок «Слово»", "releaseYear": 2021, "durationMin": 123, "ageRating": "16+",
+  "basePrice": 160.00, "description": "Драма про харківський будинок письменників.",
+  "genreIds": [1, 5], "primaryGenreId": 1 }'
+
+# порожня назва -> 400 ValidationProblemDetails з помилками по полях (не 500)
+curl -i -X POST "$CAT/api/movies" -H "Content-Type: application/json" \
+  -d '{"title":"","releaseYear":2024,"durationMin":0,"ageRating":"0+","basePrice":0,"description":""}'
+
+# неіснуючий Id -> 404 ProblemDetails
+curl -i "$CAT/api/movies/999999"
+
+# друга специфікація: розклад, дорожчі першими
+curl "$CAT/api/showtimes?sortBy=price&sortDir=desc&pageSize=3"
+```
+
+Ті самі запити є у `Services/Catalog/Catalog.Api/Catalog.Api.http`.
+
+### 12.11. Запуск без Aspire, Docker і тести
+
+```bash
+# SQL Server з Лаб. 01 (розділ 5.1), далі:
+dotnet run --project Services/Catalog/Catalog.Api       # http://localhost:5090/swagger; міграція й сідінг на старті
+
+# Docker-образ (контекст — корінь репозиторію)
+docker build -f Services/Catalog/Catalog.Api/Dockerfile -t cinema/catalog-api .
+docker run -p 8080:8080 \
+  -e ConnectionStrings__CinemaCatalog="Server=host.docker.internal,1433;Database=CinemaCatalog;User Id=sa;Password=Your_strong_Passw0rd;TrustServerCertificate=True" \
+  cinema/catalog-api
+
+dotnet test Services/Catalog/Catalog.Tests                # unit-тести (без БД)
+CATALOG_TEST_DB="Server=localhost,1433;Database=CinemaCatalogTests;User Id=sa;Password=Your_strong_Passw0rd;TrustServerCertificate=True" \
+  dotnet test Services/Catalog/Catalog.Tests              # + integration: окрема тестова БД створюється міграцією
+```
+
+Integration-тести перевіряють: міграція створює складений ключ і CHECK ціни; повторний сідінг не дублює дані; Eager Loading виконує **1** SQL-запит, а Explicit Loading **2**; пагінація йде через `OFFSET … FETCH`, а `totalCount` дорівнює кількості всіх рядків; M:N-вибірка йде одним запитом через `MovieGenres`.
+
+### 12.12. Знімки екрана для здачі (`docs/lab03/`)
+
+Знято з працюючого сервісу (Aspire) на реальних відповідях API і реальному лозі Serilog:
+
+* [01-swagger.png](docs/lab03/01-swagger.png): Swagger з усіма ендпоінтами;
+* [02-pagination.png](docs/lab03/02-pagination.png): відповідь з пагінацією (`items`, `totalCount`, `totalPages`, `hasNext`, `hasPrevious` + заголовки `X-Total-*`);
+* [03-validation-400.png](docs/lab03/03-validation-400.png): 400 `ValidationProblemDetails` з помилками по полях (DataAnnotations і FluentValidation);
+* [04-sql-log-eager-explicit.png](docs/lab03/04-sql-log-eager-explicit.png): фрагмент логу з SQL-запитами: eager = 1 запит, explicit = 2;
+* [05-errors-404-409.png](docs/lab03/05-errors-404-409.png): 404 і 409 у форматі ProblemDetails.

@@ -12,3 +12,5 @@ TestResults/
 .DS_Store
 # secrets
 appsettings.*.local.json
+# logs (Serilog File sink)
+logs/

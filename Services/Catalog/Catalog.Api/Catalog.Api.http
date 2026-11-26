@@ -1,0 +1,44 @@
+### Запити до Catalog API (Rider / VS Code REST Client). Адресу візьміть з Aspire Dashboard.
+@api = http://localhost:5090
+
+### Афіша: друга сторінка по 2, сортування за ціною за спаданням
+GET {{api}}/api/movies?page=2&pageSize=2&sortBy=price&sortDir=desc
+
+### Фільтри: жанр + діапазон ціни
+GET {{api}}/api/movies?genre=adventure&minPrice=100&maxPrice=200
+
+### Картка фільму (Eager Loading — один SQL-запит)
+GET {{api}}/api/movies/1
+
+### Жанр з фільмами (Explicit Loading — два SQL-запити)
+GET {{api}}/api/genres/2
+
+### Фільми, яким жанр додано за останні 3650 днів (LINQ через MovieGenres.AddedAt)
+GET {{api}}/api/genres/adventure/recent-movies?days=3650
+
+### Створити фільм -> 201 + Location
+POST {{api}}/api/movies
+Content-Type: application/json
+
+{ "title": "Будинок «Слово»", "releaseYear": 2021, "durationMin": 123, "ageRating": "16+",
+  "basePrice": 160.00, "description": "Драма про харківський будинок письменників.",
+  "director": "Тарас Томенко", "country": "Україна", "genreIds": [1, 5], "primaryGenreId": 1 }
+
+### Той самий фільм ще раз -> 409
+POST {{api}}/api/movies
+Content-Type: application/json
+
+{ "title": "Будинок «Слово»", "releaseYear": 2021, "durationMin": 123, "ageRating": "16+",
+  "basePrice": 160.00, "description": "Дубль", "genreIds": [1] }
+
+### Порожня назва -> 400 ValidationProblemDetails з помилками по полях
+POST {{api}}/api/movies
+Content-Type: application/json
+
+{ "title": "", "releaseYear": 1800, "durationMin": 0, "ageRating": "21+", "basePrice": 0, "description": "" }
+
+### Неіснуючий фільм -> 404 ProblemDetails
+GET {{api}}/api/movies/999999
+
+### Розклад (друга специфікація)
+GET {{api}}/api/showtimes?movieId=1&sortBy=startsAt
