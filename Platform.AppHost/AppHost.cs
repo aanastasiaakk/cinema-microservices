@@ -1,4 +1,4 @@
-// Оркестрація платформи .NET Aspire: одна команда піднімає SQL Server і обидва API.
+// Оркестрація платформи .NET Aspire: одна команда піднімає SQL Server, MongoDB і три API.
 //   dotnet run --project Platform.AppHost
 var builder = DistributedApplication.CreateBuilder(args);
 
@@ -25,6 +25,21 @@ var catalogDb = sql.AddDatabase("CinemaCatalog");
 builder.AddProject<Projects.Catalog_Api>("catalog-api")
        .WithReference(catalogDb)
        .WaitFor(catalogDb)
+       .WithExternalHttpEndpoints();
+
+// ---------- Проєкт №3: Reviews (Clean Architecture + CQRS + MongoDB), БД cinema_reviews ----------
+// Індекси й початкові дані створює сам сервіс під час старту (IndexCreationService, IDataSeeder).
+// Образ mongo:7 (як у db/docker-compose.yml): MongoDB 8.3 не стартує на ядрах Linux 6.19–7.0.13
+// (SERVER-121912), які використовує поточний Docker Desktop.
+var mongo = builder.AddMongoDB("mongo")
+                   .WithImageTag("7")
+                   .WithDataVolume("cinema-mongo-data")
+                   .WithLifetime(ContainerLifetime.Persistent);
+var reviewsDb = mongo.AddDatabase("reviewsdb", databaseName: "cinema_reviews");
+
+builder.AddProject<Projects.Reviews_WebApi>("reviews-api")
+       .WithReference(reviewsDb)                        // ConnectionStrings__reviewsdb -> MongoDb:ConnectionString
+       .WaitFor(reviewsDb)
        .WithExternalHttpEndpoints();
 
 builder.Build().Run();

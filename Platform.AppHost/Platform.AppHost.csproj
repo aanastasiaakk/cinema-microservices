@@ -4,10 +4,12 @@
     <UserSecretsId>7d1f2c8e-5b1a-4a77-9c55-cinema-apphost</UserSecretsId>
   </PropertyGroup>
   <ItemGroup>
+    <PackageReference Include="Aspire.Hosting.MongoDB" Version="13.6.5" />
     <PackageReference Include="Aspire.Hosting.SqlServer" Version="13.6.5" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\Services\Bookings\Bookings.Api\Bookings.Api.csproj" />
     <ProjectReference Include="..\Services\Catalog\Catalog.Api\Catalog.Api.csproj" />
+    <ProjectReference Include="..\Services\Reviews\Reviews.WebApi\Reviews.WebApi.csproj" />
   </ItemGroup>
 </Project>

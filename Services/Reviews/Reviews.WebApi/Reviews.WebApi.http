@@ -1,0 +1,50 @@
+### Запити до Reviews API. Адресу візьміть з Aspire Dashboard.
+@api = http://localhost:5100
+
+### Відгуки фільму, найвищі оцінки першими, сторінка 1 по 2
+GET {{api}}/api/reviews?movieId=1&sortBy=rating&sortDir=desc&page=1&pageSize=2
+
+### Повнотекстовий пошук (text-індекс)
+GET {{api}}/api/reviews?search=Карпат
+
+### Відгук за Id (ETag = версія)
+GET {{api}}/api/reviews/6750c0000000000000000001
+
+### Рейтинг фільму (aggregation pipeline, кеш 30 с)
+GET {{api}}/api/movies/3/rating
+
+### Створити відгук -> 201 + Location з рядковим ObjectId
+POST {{api}}/api/reviews
+Content-Type: application/json
+
+{ "type": "viewer", "movieId": 2, "movieTitle": "Мавка. Лісова пісня", "customerId": 3,
+  "authorName": "Ірина Бондар", "rating": 5, "text": "Дуже красиво!" }
+
+### Той самий глядач на той самий фільм -> 400 (асинхронне правило з запитом до MongoDB)
+POST {{api}}/api/reviews
+Content-Type: application/json
+
+{ "type": "viewer", "movieId": 2, "movieTitle": "Мавка. Лісова пісня", "customerId": 3,
+  "authorName": "Ірина Бондар", "rating": 4, "text": "Ще раз" }
+
+### Rating = 10 -> 400 ще до виклику обробника
+POST {{api}}/api/reviews
+Content-Type: application/json
+
+{ "type": "viewer", "movieId": 1, "movieTitle": "Довбуш", "customerId": 9, "authorName": "Тест", "rating": 10, "text": "x" }
+
+### Конфлікт версій -> 409
+PUT {{api}}/api/reviews/6750c0000000000000000005
+If-Match: "99"
+Content-Type: application/json
+
+{ "rating": 4, "text": "Передумала" }
+
+### Невалідний ObjectId -> 400; неіснуючий -> 404
+GET {{api}}/api/reviews/not-an-id
+
+###
+GET {{api}}/api/reviews/6750c00000000000000000ff
+
+### Обговорення фільму
+GET {{api}}/api/discussions?movieId=1
