@@ -14,11 +14,9 @@ CultureInfo.DefaultThreadCurrentUICulture = CultureInfo.InvariantCulture;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// ---------- Логування: Serilog (рівні, sink-и й override для SQL EF Core — в appsettings.json) ----------
-builder.Host.UseSerilog((ctx, cfg) => cfg
-    .ReadFrom.Configuration(ctx.Configuration)
-    .Enrich.FromLogContext()                                   // CorrelationId, RequestPath …
-    .Enrich.WithProperty("Service", "catalog-api"));
+// ---------- Платформа (Лаб. 05): Serilog, OpenTelemetry, health checks, service discovery, CorrelationId ----------
+// Рівні логів (у т. ч. SQL-команди EF Core) уточнює секція "Serilog" в appsettings.json.
+builder.AddServiceDefaults();
 
 // ---------- EF Core: рядок підключення з appsettings (Aspire перевизначає ConnectionStrings__CinemaCatalog) ----------
 var connectionString = builder.Configuration.GetConnectionString("CinemaCatalog")
@@ -64,7 +62,7 @@ if (app.Configuration.GetValue("Database:MigrateOnStartup", true))
 }
 
 // Порядок: кореляційний Id → лог запиту (бачить фінальний статус) → глобальний обробник помилок
-app.UseMiddleware<CorrelationIdMiddleware>();
+app.UseCorrelationId();
 app.UseSerilogRequestLogging(o =>
 {
     o.MessageTemplate = "HTTP {RequestMethod} {RequestPath} responded {StatusCode} in {Elapsed:0.0} ms";
@@ -83,6 +81,7 @@ if (app.Environment.IsDevelopment())
 }
 
 app.MapControllers();
+app.MapDefaultEndpoints();
 app.MapGet("/", () => Results.Redirect("/swagger")).ExcludeFromDescription();
 
 app.Run();

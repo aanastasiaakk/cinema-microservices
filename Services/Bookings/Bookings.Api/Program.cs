@@ -10,12 +10,8 @@ using Serilog;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// ---------- Логування: Serilog (+ CorrelationId з LogContext) ----------
-builder.Host.UseSerilog((ctx, cfg) => cfg
-    .ReadFrom.Configuration(ctx.Configuration)
-    .Enrich.FromLogContext()
-    .WriteTo.Console(outputTemplate:
-        "[{Timestamp:HH:mm:ss} {Level:u3}] {CorrelationId} {SourceContext}: {Message:lj}{NewLine}{Exception}"));
+// ---------- Платформа (Лаб. 05): Serilog, OpenTelemetry, health checks, service discovery, CorrelationId ----------
+builder.AddServiceDefaults();
 
 // ---------- Рядок підключення: appsettings.json, перевизначається змінною оточення ----------
 // ConnectionStrings__CinemaBooking=...   (так само його передає Aspire через WithReference)
@@ -66,7 +62,7 @@ if (app.Configuration.GetValue<bool>("Database:ApplyScripts"))
 }
 
 // Порядок: кореляційний Id → лог запиту (бачить фінальний статус) → глобальний обробник помилок
-app.UseMiddleware<CorrelationIdMiddleware>();
+app.UseCorrelationId();
 app.UseSerilogRequestLogging();
 app.UseExceptionHandler();
 
@@ -77,6 +73,7 @@ if (app.Environment.IsDevelopment())
 }
 
 app.MapControllers();
+app.MapDefaultEndpoints();
 app.MapGet("/", () => Results.Redirect("/swagger")).ExcludeFromDescription();
 
 app.Run();

@@ -1,3 +1,4 @@
+using Catalog.Bll.Diagnostics;
 using AutoMapper;
 using Catalog.Bll.Dto;
 using Catalog.Bll.Interfaces;
@@ -34,6 +35,9 @@ public sealed class MovieService(IUnitOfWork uow, IMapper mapper, TimeProvider c
 
     public async Task<MovieDto> CreateAsync(CreateMovieDto input, CancellationToken ct)
     {
+        using var activity = CatalogTelemetry.Source.StartActivity("CreateMovie");
+        activity?.SetTag("movie.release_year", input.ReleaseYear);
+        activity?.SetTag("movie.genres_count", input.GenreIds.Count);
         if (await uow.Movies.ExistsByTitleAndYearAsync(input.Title.Trim(), input.ReleaseYear, ct: ct))
             throw new ConflictException($"Movie '{input.Title}' ({input.ReleaseYear}) already exists");
 
@@ -52,13 +56,16 @@ public sealed class MovieService(IUnitOfWork uow, IMapper mapper, TimeProvider c
         await uow.Movies.AddAsync(movie, ct);
         await uow.SaveChangesAsync(ct);                              // Movies + MovieDetails + MovieGenres — одна транзакція
 
-        logger.LogInformation("Movie {MovieId} '{Title}' created with {GenreCount} genres",
-            movie.Id, movie.Title, input.GenreIds.Count);
+        activity?.SetTag("movie.id", movie.Id);
+        logger.LogInformation("Movie {MovieId} '{Title}' created with {GenreCount} genres, base price {BasePrice}",
+            movie.Id, movie.Title, input.GenreIds.Count, movie.BasePrice);
         return await GetByIdAsync(movie.Id, ct);
     }
 
     public async Task ChangePriceAsync(long id, decimal price, CancellationToken ct)
     {
+        using var activity = CatalogTelemetry.Source.StartActivity("ChangeMoviePrice");
+        activity?.SetTag("movie.id", id);
         var movie = await uow.Movies.GetByIdAsync(id, ct) ?? throw new EntityNotFoundException(nameof(Movie), id);
         var old = movie.BasePrice;
         movie.ChangePrice(price);                                    // правило ціни — у сутності

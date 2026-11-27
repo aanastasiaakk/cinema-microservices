@@ -1,3 +1,5 @@
+using Microsoft.Extensions.Logging;
+using Reviews.Application.Common.Diagnostics;
 using AutoMapper;
 using FluentValidation;
 using MediatR;
@@ -46,11 +48,15 @@ public sealed class CreateReviewCommandValidator : AbstractValidator<CreateRevie
     }
 }
 
-public sealed class CreateReviewCommandHandler(IReviewRepository reviews, IMapper mapper, ICacheInvalidator cache)
+public sealed class CreateReviewCommandHandler(IReviewRepository reviews, IMapper mapper, ICacheInvalidator cache,
+                                               ILogger<CreateReviewCommandHandler> logger)
     : IRequestHandler<CreateReviewCommand, ReviewDto>
 {
     public async Task<ReviewDto> Handle(CreateReviewCommand cmd, CancellationToken ct)
     {
+        using var activity = ReviewsTelemetry.Source.StartActivity("CreateReview");
+        activity?.SetTag("movie.id", cmd.MovieId);
+        activity?.SetTag("review.type", cmd.Type);
         var type = Enum.Parse<ReviewType>(cmd.Type, ignoreCase: true);
         var review = new Review(
             type, cmd.MovieId, cmd.MovieTitle, new Author(cmd.CustomerId, cmd.AuthorName), new Rating(cmd.Rating), cmd.Text,
@@ -59,6 +65,9 @@ public sealed class CreateReviewCommandHandler(IReviewRepository reviews, IMappe
 
         await reviews.AddAsync(review, ct);
         cache.Invalidate(CacheKeys.MovieRating(cmd.MovieId));
+        activity?.SetTag("review.id", review.Id.ToString());
+        logger.LogInformation("Review {ReviewId} ({ReviewType}) created for movie {MovieId} by customer {CustomerId} with rating {Rating}",
+            review.Id.ToString(), cmd.Type, cmd.MovieId, cmd.CustomerId, cmd.Rating);
         return mapper.Map<ReviewDto>(review);
     }
 }

@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <!-- API Gateway (YARP): єдина точка входу, маршрутизація за логічними іменами сервісів, CorrelationId, логування трафіку.
+       Посилається ЛИШЕ на ServiceDefaults. -->
+  <ItemGroup>
+    <ProjectReference Include="..\Platform.ServiceDefaults\Platform.ServiceDefaults.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.ServiceDiscovery.Yarp" Version="10.11.1" />
+    <PackageReference Include="Yarp.ReverseProxy" Version="2.3.0" />
+  </ItemGroup>
+</Project>

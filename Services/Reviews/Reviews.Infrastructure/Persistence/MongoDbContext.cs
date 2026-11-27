@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Options;
 using MongoDB.Driver;
+using MongoDB.Driver.Core.Extensions.DiagnosticSources;
 using Reviews.Domain.Entities;
 
 namespace Reviews.Infrastructure.Persistence;
@@ -22,7 +23,11 @@ public sealed class MongoDbContext
             throw new InvalidOperationException("MongoDb:DatabaseName is not configured");
 
         MongoMappings.Register();                                   // гарантовано до першого звернення
-        Client = new MongoClient(settings.ConnectionString);
+        // підписка драйвера на трасування: кожна команда MongoDB — окремий span (Лаб. 05, OpenTelemetry)
+        var clientSettings = MongoClientSettings.FromConnectionString(settings.ConnectionString);
+        clientSettings.ClusterConfigurator = cb => cb.Subscribe(
+            new DiagnosticsActivityEventSubscriber(new InstrumentationOptions { CaptureCommandText = true }));
+        Client = new MongoClient(clientSettings);
         Database = Client.GetDatabase(settings.DatabaseName);
     }
 

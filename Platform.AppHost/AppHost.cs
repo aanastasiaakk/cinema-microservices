@@ -1,45 +1,49 @@
-// Оркестрація платформи .NET Aspire: одна команда піднімає SQL Server, MongoDB і три API.
-//   dotnet run --project Platform.AppHost
+// Оркестрація платформи .NET Aspire: одна команда піднімає бази даних, три мікросервіси,
+// Aggregator і API Gateway.   dotnet run --project Platform.AppHost
+// Порядок запуску (WaitFor): БД → сервіси → Aggregator → Gateway.
 var builder = DistributedApplication.CreateBuilder(args);
 
-// SQL Server у контейнері (дані зберігаються у volume між запусками).
-// Імена ресурсів БД = імена рядків підключення в appsettings.json сервісів,
-// тому Aspire передає їх як ConnectionStrings__<ім'я> автоматично (WithReference).
-var sql = builder.AddSqlServer("sql")
+// ---------- Бази даних (контейнери з постійним сховищем) ----------
+// Пароль SQL Server — параметр-секрет (user-secrets AppHost: Parameters:sql-password), а не текст у коді.
+var sqlPassword = builder.AddParameter("sql-password", secret: true);
+var sql = builder.AddSqlServer("sql", sqlPassword)
                  .WithDataVolume("cinema-sql-data")
                  .WithLifetime(ContainerLifetime.Persistent);
 
-// ---------- Проєкт №1: Bookings (ADO.NET + Dapper), БД CinemaBooking ----------
-var bookingDb = sql.AddDatabase("CinemaBooking");
+// Імена баз = імена рядків підключення в appsettings сервісів (ConnectionStrings:<ім'я>)
+var bookingDb = sql.AddDatabase("CinemaBooking");             // Лаб. 02
+var catalogDb = sql.AddDatabase("CinemaCatalog");             // Лаб. 03
 
-builder.AddProject<Projects.Bookings_Api>("bookings-api")
-       .WithReference(bookingDb)                         // рядок підключення -> API
-       .WaitFor(bookingDb)                               // API стартує, коли БД готова
-       .WithEnvironment("Database__ApplyScripts", "true")// порожня БД -> скрипти db/p1 Лаб. 01
-       .WithExternalHttpEndpoints();
-
-// ---------- Проєкт №2: Catalog (EF Core Code First), БД CinemaCatalog ----------
-// Схему створює сам сервіс міграціями EF Core (MigrateAsync) + ідемпотентний сідінг.
-var catalogDb = sql.AddDatabase("CinemaCatalog");
-
-builder.AddProject<Projects.Catalog_Api>("catalog-api")
-       .WithReference(catalogDb)
-       .WaitFor(catalogDb)
-       .WithExternalHttpEndpoints();
-
-// ---------- Проєкт №3: Reviews (Clean Architecture + CQRS + MongoDB), БД cinema_reviews ----------
-// Індекси й початкові дані створює сам сервіс під час старту (IndexCreationService, IDataSeeder).
-// Образ mongo:7 (як у db/docker-compose.yml): MongoDB 8.3 не стартує на ядрах Linux 6.19–7.0.13
-// (SERVER-121912), які використовує поточний Docker Desktop.
+// mongo:7 — MongoDB 8.x не стартує на ядрах Linux 6.19–7.0.13 (SERVER-121912) у Docker Desktop
 var mongo = builder.AddMongoDB("mongo")
                    .WithImageTag("7")
                    .WithDataVolume("cinema-mongo-data")
                    .WithLifetime(ContainerLifetime.Persistent);
-var reviewsDb = mongo.AddDatabase("reviewsdb", databaseName: "cinema_reviews");
+var reviewsDb = mongo.AddDatabase("reviewsdb", databaseName: "cinema_reviews");   // Лаб. 04
 
-builder.AddProject<Projects.Reviews_WebApi>("reviews-api")
-       .WithReference(reviewsDb)                        // ConnectionStrings__reviewsdb -> MongoDb:ConnectionString
-       .WaitFor(reviewsDb)
-       .WithExternalHttpEndpoints();
+// ---------- Мікросервіси (ім'я ресурсу = логічне ім'я для service discovery) ----------
+var bookings = builder.AddProject<Projects.Bookings_Api>("bookings-api")
+       .WithReference(bookingDb).WaitFor(bookingDb)
+       .WithEnvironment("Database__ApplyScripts", "true");    // порожня БД -> скрипти db/p1 Лаб. 01
+
+var catalog = builder.AddProject<Projects.Catalog_Api>("catalog-api")
+       .WithReference(catalogDb).WaitFor(catalogDb);          // схема — міграцією EF Core
+
+var reviews = builder.AddProject<Projects.Reviews_WebApi>("reviews-api")
+       .WithReference(reviewsDb).WaitFor(reviewsDb);          // індекси й сідінг — сам сервіс
+
+// ---------- Aggregator: опитує сервіси паралельно ----------
+var aggregator = builder.AddProject<Projects.Platform_Aggregator>("aggregator")
+       .WithReference(bookings).WithReference(catalog).WithReference(reviews)
+       .WaitFor(bookings).WaitFor(catalog).WaitFor(reviews);
+
+// ---------- API Gateway: єдина точка входу на ФІКСОВАНОМУ порту ----------
+// 5050, а не 5000: на macOS порт 5000 зайнятий AirPlay Receiver.
+builder.AddProject<Projects.Platform_ApiGateway>("gateway")
+       .WithHttpEndpoint(port: 5050, name: "http")
+       .WithExternalHttpEndpoints()
+       .WithReference(bookings).WithReference(catalog).WithReference(reviews)
+       .WithReference(aggregator)
+       .WaitFor(aggregator);
 
 builder.Build().Run();

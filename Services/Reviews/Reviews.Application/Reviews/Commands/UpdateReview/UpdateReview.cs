@@ -1,3 +1,5 @@
+using Microsoft.Extensions.Logging;
+using Reviews.Application.Common.Diagnostics;
 using AutoMapper;
 using FluentValidation;
 using MediatR;
@@ -28,11 +30,14 @@ public sealed class UpdateReviewCommandValidator : AbstractValidator<UpdateRevie
     }
 }
 
-public sealed class UpdateReviewCommandHandler(IReviewRepository reviews, IMapper mapper, ICacheInvalidator cache)
+public sealed class UpdateReviewCommandHandler(IReviewRepository reviews, IMapper mapper, ICacheInvalidator cache,
+                                               ILogger<UpdateReviewCommandHandler> logger)
     : IRequestHandler<UpdateReviewCommand, ReviewDto>
 {
     public async Task<ReviewDto> Handle(UpdateReviewCommand cmd, CancellationToken ct)
     {
+        using var activity = ReviewsTelemetry.Source.StartActivity("UpdateReview");
+        activity?.SetTag("review.id", cmd.Id);
         var review = await reviews.GetByIdAsync(ObjectId.Parse(cmd.Id), ct);
         if (review is null || review.IsDeleted) throw new NotFoundException("Review", cmd.Id);
 
@@ -44,6 +49,7 @@ public sealed class UpdateReviewCommandHandler(IReviewRepository reviews, IMappe
         review.Edit(new Rating(cmd.Rating), cmd.Text, cmd.ContainsSpoilers);
         await reviews.UpdateAsync(review, expected, ct);
         cache.Invalidate(CacheKeys.MovieRating(review.MovieId));
+        logger.LogInformation("Review {ReviewId} updated: rating {Rating}, version {Version}", cmd.Id, cmd.Rating, review.Version);
         return mapper.Map<ReviewDto>(review);
     }
 }

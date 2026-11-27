@@ -10,11 +10,11 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\Bookings.Bll\Bookings.Bll.csproj" />
+    <ProjectReference Include="..\..\..\Platform.ServiceDefaults\Platform.ServiceDefaults.csproj" />
   </ItemGroup>
   <ItemGroup>
     <!-- SQL-скрипти Лаб. 01 (db/p1) копіюються у вихідну папку для ініціалізації порожньої БД
          в контейнері Aspire. Файли НЕ дублюються в репозиторії — це посилання. -->
-    <Content Include="..\..\..\db\p1\schema.sql;..\..\..\db\p1\procedures.sql;..\..\..\db\p1\seed.sql"
-             Link="db\p1\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="..\..\..\db\p1\schema.sql;..\..\..\db\p1\procedures.sql;..\..\..\db\p1\seed.sql" Link="db\p1\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

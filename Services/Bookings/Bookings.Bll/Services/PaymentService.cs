@@ -1,3 +1,4 @@
+using Bookings.Bll.Diagnostics;
 using System.Data;
 using AutoMapper;
 using Bookings.Bll.Dto;
@@ -23,6 +24,11 @@ public sealed class PaymentService(IUnitOfWork uow, IMapper mapper, TimeProvider
     /// </summary>
     public async Task<PaymentResult> PayAsync(long bookingId, string idempotencyKey, PayBookingDto input, CancellationToken ct)
     {
+        using var activity = BookingsTelemetry.Source.StartActivity("PayBooking");
+        activity?.SetTag("booking.id", bookingId);
+        activity?.SetTag("payment.amount", input.Amount);
+        activity?.SetTag("payment.method", input.Method);
+
         if (string.IsNullOrWhiteSpace(idempotencyKey) || idempotencyKey.Length > 100)
             throw new ValidationException("Idempotency-Key", "Idempotency-Key header is required (max 100 chars)");
 
@@ -69,7 +75,9 @@ public sealed class PaymentService(IUnitOfWork uow, IMapper mapper, TimeProvider
             throw;
         }
 
-        logger.LogInformation("Booking {BookingId} paid, payment {PaymentId}", bookingId, paymentId);
+        activity?.SetTag("payment.id", paymentId);
+        logger.LogInformation("Booking {BookingId} paid: payment {PaymentId}, {Amount} by {Method}, status {Status}",
+            bookingId, paymentId, input.Amount, input.Method, BookingStatus.Paid);
         var payment = await uow.Payments.GetByIdAsync(paymentId, ct);
         return new PaymentResult(mapper.Map<PaymentDto>(payment), Replayed: false);
     }

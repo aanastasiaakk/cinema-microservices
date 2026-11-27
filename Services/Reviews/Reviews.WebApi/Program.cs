@@ -12,10 +12,8 @@ CultureInfo.DefaultThreadCurrentUICulture = CultureInfo.InvariantCulture;
 
 var builder = WebApplication.CreateBuilder(args);
 
-builder.Host.UseSerilog((ctx, cfg) => cfg
-    .ReadFrom.Configuration(ctx.Configuration)
-    .Enrich.FromLogContext()
-    .Enrich.WithProperty("Service", "reviews-api"));
+// ---------- Платформа (Лаб. 05): Serilog, OpenTelemetry, health checks, service discovery, CorrelationId ----------
+builder.AddServiceDefaults();
 
 // ---------- Шари: кожен надає свій метод розширення ----------
 builder.Services
@@ -48,7 +46,7 @@ builder.Services.AddSwaggerGen(o =>
 
 var app = builder.Build();
 
-app.UseMiddleware<CorrelationIdMiddleware>();
+app.UseCorrelationId();
 app.UseSerilogRequestLogging(o =>
     o.MessageTemplate = "HTTP {RequestMethod} {RequestPath} responded {StatusCode} in {Elapsed:0.0} ms");
 app.UseExceptionHandler();
@@ -60,7 +58,7 @@ if (!app.Environment.IsProduction())
 }
 
 app.MapControllers();
-app.MapHealthChecks("/health");
+app.MapDefaultEndpoints();                                  // /health (з перевіркою MongoDB) і /alive
 app.MapGet("/", () => Results.Redirect("/swagger")).ExcludeFromDescription();
 
 app.Run();

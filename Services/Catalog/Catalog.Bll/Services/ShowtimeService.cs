@@ -1,3 +1,4 @@
+using Catalog.Bll.Diagnostics;
 using AutoMapper;
 using Catalog.Bll.Caching;
 using Catalog.Bll.Dto;
@@ -31,6 +32,9 @@ public sealed class ShowtimeService(IUnitOfWork uow, IMapper mapper, CatalogCach
 
     public async Task<ShowtimeDto> CreateAsync(CreateShowtimeDto input, CancellationToken ct)
     {
+        using var activity = CatalogTelemetry.Source.StartActivity("ScheduleShowtime");
+        activity?.SetTag("movie.id", input.MovieId);
+        activity?.SetTag("hall.id", input.HallId);
         var movie = await uow.Movies.GetByIdAsync(input.MovieId, ct)
                     ?? throw new EntityNotFoundException(nameof(Movie), input.MovieId);
         _ = await uow.Halls.GetByIdAsync(input.HallId, ct)
@@ -53,7 +57,7 @@ public sealed class ShowtimeService(IUnitOfWork uow, IMapper mapper, CatalogCach
         var showtime = await uow.Showtimes.GetByIdAsync(id, ct) ?? throw new EntityNotFoundException(nameof(Showtime), id);
         showtime.Cancel(clock.GetUtcNow().UtcDateTime);
         await uow.SaveChangesAsync(ct);
-        logger.LogInformation("Showtime {ShowtimeId} cancelled", id);
+        logger.LogInformation("Showtime {ShowtimeId} cancelled, status {Status}", id, "Cancelled");
     }
 
     public Task<IReadOnlyList<HallDto>> GetHallsAsync(CancellationToken ct)

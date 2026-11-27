@@ -1,3 +1,4 @@
+using Bookings.Bll.Diagnostics;
 using System.Data;
 using System.Security.Cryptography;
 using AutoMapper;
@@ -46,6 +47,10 @@ public sealed class BookingService(IUnitOfWork uow, IMapper mapper, TimeProvider
     /// </summary>
     public async Task<BookingDto> CreateAsync(CreateBookingDto input, CancellationToken ct)
     {
+        using var activity = BookingsTelemetry.Source.StartActivity("CreateBooking");
+        activity?.SetTag("booking.customer_id", input.CustomerId);
+        activity?.SetTag("booking.tickets_count", input.Tickets.Count);
+
         // бізнес-валідація без БД: одне місце двічі в одному запиті
         var duplicate = input.Tickets
             .GroupBy(t => (t.ShowtimeId, t.SeatRow, t.SeatNumber))
@@ -111,8 +116,12 @@ public sealed class BookingService(IUnitOfWork uow, IMapper mapper, TimeProvider
             throw;
         }
 
-        logger.LogInformation("Booking {BookingId} created with {Tickets} tickets", bookingId, input.Tickets.Count);
-        return await GetAsync(bookingId, ct);
+        activity?.SetTag("booking.id", bookingId);
+        var created = await GetAsync(bookingId, ct);
+        // бізнес-подія: лише ідентифікатори, кількості й суми — без персональних даних клієнта
+        logger.LogInformation("Booking {BookingId} created for customer {CustomerId}: {TicketsCount} tickets, {TotalAmount} total, status {Status}",
+            bookingId, input.CustomerId, input.Tickets.Count, created.TotalAmount, created.Status);
+        return created;
     }
 
     public Task SubmitAsync(long id, CancellationToken ct) =>
@@ -136,8 +145,11 @@ public sealed class BookingService(IUnitOfWork uow, IMapper mapper, TimeProvider
     /// </summary>
     private async Task ChangeStatusAsync(long id, string newStatus, string? reason, CancellationToken ct)
     {
+        using var activity = BookingsTelemetry.Source.StartActivity("ChangeBookingStatus");
+        activity?.SetTag("booking.id", id);
+        activity?.SetTag("booking.status", newStatus);
         await uow.Bookings.ChangeStatusAsync(id, newStatus, reason, expectedRowVersion: null, User, ct);
-        logger.LogInformation("Booking {BookingId} -> {Status}", id, newStatus);
+        logger.LogInformation("Booking {BookingId} status changed to {Status}", id, newStatus);
     }
 
     private static string NewBookingCode() =>

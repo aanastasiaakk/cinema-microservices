@@ -1,3 +1,5 @@
+using Microsoft.Extensions.Logging;
+using Reviews.Application.Common.Diagnostics;
 using FluentValidation;
 using MediatR;
 using MongoDB.Bson;
@@ -21,11 +23,14 @@ public sealed class DeleteReviewCommandValidator : AbstractValidator<DeleteRevie
     }
 }
 
-public sealed class DeleteReviewCommandHandler(IReviewRepository reviews, ICacheInvalidator cache)
+public sealed class DeleteReviewCommandHandler(IReviewRepository reviews, ICacheInvalidator cache,
+                                               ILogger<DeleteReviewCommandHandler> logger)
     : IRequestHandler<DeleteReviewCommand>
 {
     public async Task Handle(DeleteReviewCommand cmd, CancellationToken ct)
     {
+        using var activity = ReviewsTelemetry.Source.StartActivity("DeleteReview");
+        activity?.SetTag("review.id", cmd.Id);
         var review = await reviews.GetByIdAsync(ObjectId.Parse(cmd.Id), ct);
         if (review is null || review.IsDeleted) throw new NotFoundException("Review", cmd.Id);
 
@@ -36,5 +41,6 @@ public sealed class DeleteReviewCommandHandler(IReviewRepository reviews, ICache
         review.Delete();
         await reviews.UpdateAsync(review, expected, ct);
         cache.Invalidate(CacheKeys.MovieRating(review.MovieId));
+        logger.LogInformation("Review {ReviewId} for movie {MovieId} deleted (soft), status {Status}", cmd.Id, review.MovieId, "Deleted");
     }
 }

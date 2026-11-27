@@ -39,6 +39,7 @@ public class ArchitectureTests
     public void Infrastructure_and_WebApi_point_inwards()
     {
         Assert.Equal(["Reviews.Application", "Reviews.Domain"], Refs("Reviews.Infrastructure").Projects.Order());
-        Assert.Equal(["Reviews.Application", "Reviews.Infrastructure"], Refs("Reviews.WebApi").Projects.Order());
+        // Лаб. 05: WebApi додатково підключає спільні налаштування платформи (Platform.ServiceDefaults)
+        Assert.Equal(["Platform.ServiceDefaults", "Reviews.Application", "Reviews.Infrastructure"], Refs("Reviews.WebApi").Projects.Order());
     }
 }
