@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Mvc;
 using Platform.Aggregator.Caching;
 using Platform.Aggregator.Grpc;
+using Platform.Aggregator.Metrics;
 using Platform.Aggregator.Models;
 using Platform.Aggregator.Services;
 
@@ -11,7 +12,8 @@ namespace Platform.Aggregator.Controllers;
 [Route("api/aggregator")]
 [Produces("application/json")]
 public sealed class AggregatorController(BookingCardAggregator aggregator, GrpcBookingCardSource grpc,
-                                         HttpBookingCardSource http, AggregatedResponseCache cache) : ControllerBase
+                                         HttpBookingCardSource http, AggregatedResponseCache cache,
+                                         AggregatorMetrics metrics) : ControllerBase
 {
     /// <summary>
     /// Повна картка бронювання: бронювання й клієнт (bookings-api) + сеанси й фільми (catalog-api) +
@@ -34,20 +36,29 @@ public sealed class AggregatorController(BookingCardAggregator aggregator, GrpcB
             return Problem(statusCode: StatusCodes.Status400BadRequest, title: "Unknown transport", detail: "transport must be 'grpc' or 'http'");
         Response.Headers["X-Aggregator-Transport"] = source.Transport;
 
+        using var inFlight = metrics.Track();
+        var sw = System.Diagnostics.Stopwatch.StartNew();
         var bypass = Request.Headers.CacheControl.ToString().Contains("no-cache", StringComparison.OrdinalIgnoreCase);
+        var cacheState = bypass ? "bypass" : "miss";
         var key = AggregatedResponseCache.Key(id, source.Transport);
         if (!bypass && await cache.TryGetAsync(key, ct) is { } cached)              // кеш перевіряється ДО викликів сервісів
         {
             Response.Headers["X-Aggregator-Cache"] = "HIT";
+            metrics.CardServed(cached.IsPartial ? "partial" : "full", source.Transport, "hit", sw.Elapsed.TotalMilliseconds);
             return Ok(cached);
         }
         Response.Headers["X-Aggregator-Cache"] = bypass ? "BYPASS" : "MISS";
 
+        var result = "unavailable";
         try
         {
             var card = await aggregator.GetFullBookingAsync(source, id, ct);
             if (card is null)
+            {
+                result = "not_found";
                 return Problem(statusCode: StatusCodes.Status404NotFound, title: "Booking not found", detail: $"Booking {id} was not found");
+            }
+            result = card.IsPartial ? "partial" : "full";
             await cache.SetAsync(key, card, ct);                                   // часткові не кешуються
             return Ok(card);
         }
@@ -55,6 +66,10 @@ public sealed class AggregatorController(BookingCardAggregator aggregator, GrpcB
         {
             return Problem(statusCode: StatusCodes.Status503ServiceUnavailable, title: "Required service unavailable",
                            detail: $"{ex.Service} is unavailable, the booking card cannot be built");
+        }
+        finally
+        {
+            metrics.CardServed(result, source.Transport, cacheState, sw.Elapsed.TotalMilliseconds);   // і для невдалих
         }
     }
 }

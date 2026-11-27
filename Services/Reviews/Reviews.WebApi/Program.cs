@@ -5,6 +5,8 @@ using Reviews.Application;
 using Reviews.Infrastructure;
 using Reviews.WebApi.Contracts;
 using Reviews.WebApi.Grpc;
+using Reviews.WebApi.HealthChecks;
+using Reviews.WebApi.Metrics;
 using Reviews.WebApi.Infrastructure;
 using Serilog;
 
@@ -40,8 +42,11 @@ builder.Services.AddProblemDetails(o => o.CustomizeProblemDetails = ctx =>
     ctx.ProblemDetails.Extensions["traceId"] = ctx.HttpContext.TraceIdentifier);
 builder.Services.AddExceptionHandler<GlobalExceptionHandler>();
 
-builder.Services.AddHealthChecks()
-    .AddMongoDb(sp => sp.GetRequiredService<IMongoClient>(), name: "mongodb", timeout: TimeSpan.FromSeconds(3));
+// ---------- Лаб. 07: health checks (reviews-db + gRPC Health) і бізнес-метрики ----------
+builder.Services.AddReviewsHealthChecks();
+builder.Services.AddSingleton<ReviewMetrics>();
+// першим у pipeline MediatR (найзовнішній), щоб виміряти і відхилені валідацією запити
+builder.Services.Insert(0, ServiceDescriptor.Transient(typeof(MediatR.IPipelineBehavior<,>), typeof(MetricsBehavior<,>)));
 
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(o =>
@@ -67,6 +72,7 @@ if (!app.Environment.IsProduction())
 
 app.MapControllers();
 app.MapGrpcService<ReviewsGrpcService>();
+app.MapGrpcHealthChecksService();
 app.MapDefaultEndpoints();                                  // /health (з перевіркою MongoDB) і /alive
 app.MapGet("/", () => Results.Redirect("/swagger")).ExcludeFromDescription();
 

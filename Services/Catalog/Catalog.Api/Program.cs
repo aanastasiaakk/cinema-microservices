@@ -1,6 +1,9 @@
 using System.Globalization;
 using System.Reflection;
 using Catalog.Api.Grpc;
+using Catalog.Api.HealthChecks;
+using Catalog.Api.Metrics;
+using Catalog.Bll.Interfaces;
 using Catalog.Api.Middleware;
 using Catalog.Bll;
 using Catalog.Dal;
@@ -35,9 +38,12 @@ builder.Services.AddMemoryCache(o =>
     o.SizeLimit = 10_000;                                     // ≈ 10 МБ: кожен запис має Size ≈ КБ серіалізованого DTO
     o.CompactionPercentage = 0.25;                            // при переповненні витіснити 25 % (спершу Low/Normal priority)
     o.ExpirationScanFrequency = TimeSpan.FromMinutes(1);
+    o.TrackStatistics = true;                                 // для gauge catalog.cache.l1.* (Лаб. 07)
 });
 if (!string.IsNullOrWhiteSpace(builder.Configuration.GetConnectionString("redis")))
-    builder.AddRedisDistributedCache("redis", configureOptions: o =>    // ConnectionStrings:redis від Aspire
+    builder.AddRedisDistributedCache("redis",                          // ConnectionStrings:redis від Aspire
+        settings => settings.DisableHealthChecks = true,                // власний redis-cache зі статусом Degraded
+        o =>
     {
         o.AbortOnConnectFail = false;                         // Redis недоступний → сервіс працює далі (без L2)
         o.ConnectTimeout = 2000;
@@ -57,6 +63,12 @@ builder.Services.AddGrpc(o =>
 // ---------- DI: Unit of Work і сервіси — Scoped (один DbContext на запит) ----------
 builder.Services.AddScoped<IUnitOfWork, UnitOfWork>();
 builder.Services.AddCatalogBll(builder.Configuration["AutoMapper:LicenseKey"]);
+
+// ---------- Лаб. 07: бізнес-метрики (декоратори над BLL) і health checks ----------
+builder.Services.AddSingleton<CatalogMetrics>();
+builder.Services.Decorate<IMovieService>((inner, sp) => new MeteredMovieService(inner, sp.GetRequiredService<CatalogMetrics>()));
+builder.Services.Decorate<IShowtimeService>((inner, sp) => new MeteredShowtimeService(inner, sp.GetRequiredService<CatalogMetrics>()));
+builder.Services.AddCatalogHealthChecks(builder.Configuration);
 
 builder.Services.AddControllers();
 
@@ -108,6 +120,7 @@ if (app.Environment.IsDevelopment())
 
 app.MapControllers();
 app.MapGrpcService<CatalogGrpcService>();
+app.MapGrpcHealthChecksService();
 app.MapDefaultEndpoints();
 app.MapGet("/", () => Results.Redirect("/swagger")).ExcludeFromDescription();
 

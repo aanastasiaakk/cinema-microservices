@@ -29,7 +29,16 @@ public static class Extensions
     /// <summary>Джерело spans драйвера MongoDB (DiagnosticsActivityEventSubscriber).</summary>
     public const string MongoActivitySource = "MongoDB.Driver.Core.Extensions.DiagnosticSources";
 
+    /// <summary>Meter-и бізнес-метрик сервісів (Лаб. 07) — назва Meter = назва сервісу.</summary>
+    public static readonly string[] BusinessMeters = ["Bookings.Api", "Catalog.Api", "Reviews.Api", "Platform.Aggregator"];
+
+    /// <summary>Теги health checks: live — лише процес; ready — залежності, без яких сервіс не приймає трафік.</summary>
+    public const string LiveTag = "live";
+    public const string ReadyTag = "ready";
+
     private const string HealthEndpointPath = "/health";
+    private const string LivenessEndpointPath = "/health/live";
+    private const string ReadinessEndpointPath = "/health/ready";
     private const string AlivenessEndpointPath = "/alive";
 
     public static TBuilder AddServiceDefaults<TBuilder>(this TBuilder builder) where TBuilder : IHostApplicationBuilder
@@ -102,6 +111,8 @@ public static class Extensions
             }))
             .WithMetrics(metrics => metrics
                 .AddMeter(CacheMetrics.MeterName)                                      // cache.hits / cache.misses (L1/L2)
+                .AddMeter(BusinessMeters)                                              // бізнес-метрики сервісів (Лаб. 07)
+                .AddMeter("Polly")                                                     // resilience.polly.* (OnRetry, OnCircuitOpened…)
                 .AddMeter(CinemaActivitySourcePrefix + "*")
                 .AddAspNetCoreInstrumentation()
                 .AddHttpClientInstrumentation()
@@ -117,6 +128,7 @@ public static class Extensions
                     .AddSource(MongoActivitySource)                                        // команди MongoDB (Лаб. 04)
                     .AddAspNetCoreInstrumentation(o =>
                         o.Filter = ctx => !ctx.Request.Path.StartsWithSegments(HealthEndpointPath)
+                                          && !ctx.Request.Path.StartsWithSegments("/grpc.health.v1.Health")
                                           && !ctx.Request.Path.StartsWithSegments(AlivenessEndpointPath))
                     .AddHttpClientInstrumentation()                                        // у т. ч. клієнтські gRPC-виклики
                     .AddSqlClientInstrumentation();                                        // Dapper (Лаб. 02) і EF Core (Лаб. 03)
@@ -132,16 +144,33 @@ public static class Extensions
 
     public static TBuilder AddDefaultHealthChecks<TBuilder>(this TBuilder builder) where TBuilder : IHostApplicationBuilder
     {
+        // liveness: лише «процес живий», без зовнішніх залежностей — має відповідати < 100 мс
         builder.Services.AddHealthChecks()
-            .AddCheck("self", () => HealthCheckResult.Healthy(), ["live"]);
+            .AddCheck("self", () => HealthCheckResult.Healthy("process is running"), [LiveTag]);
         return builder;
     }
 
-    /// <summary>/health — усі перевірки (у т. ч. БД сервісу), /alive — лише «процес живий».</summary>
+    /// <summary>
+    /// Health endpoints у ВСІХ середовищах (їх використовують Aspire і Kubernetes, Лаб. 10):
+    ///  • /health/live  — liveness: лише перевірки з тегом live (процес), збій → перезапуск;
+    ///  • /health/ready — readiness: перевірки з тегом ready (БД, кеш, залежності) з JSON-деталями, збій → поза балансуванням;
+    ///  • /health       — усі перевірки з JSON-деталями (діагностика);  /alive — сумісність із шаблоном Aspire.
+    /// Degraded (наприклад, недоступний Redis) повертає 200: сервіс працює, але без необов'язкової залежності.
+    /// </summary>
     public static WebApplication MapDefaultEndpoints(this WebApplication app)
     {
-        app.MapHealthChecks(HealthEndpointPath);
-        app.MapHealthChecks(AlivenessEndpointPath, new HealthCheckOptions { Predicate = r => r.Tags.Contains("live") });
+        app.MapHealthChecks(LivenessEndpointPath, new HealthCheckOptions
+        {
+            Predicate = r => r.Tags.Contains(LiveTag),
+            ResponseWriter = HealthResponseWriter.WriteJsonAsync
+        });
+        app.MapHealthChecks(ReadinessEndpointPath, new HealthCheckOptions
+        {
+            Predicate = r => r.Tags.Contains(ReadyTag),
+            ResponseWriter = HealthResponseWriter.WriteJsonAsync
+        });
+        app.MapHealthChecks(HealthEndpointPath, new HealthCheckOptions { ResponseWriter = HealthResponseWriter.WriteJsonAsync });
+        app.MapHealthChecks(AlivenessEndpointPath, new HealthCheckOptions { Predicate = r => r.Tags.Contains(LiveTag) });
         return app;
     }
 

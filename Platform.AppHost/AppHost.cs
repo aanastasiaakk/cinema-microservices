@@ -29,20 +29,24 @@ var redis = builder.AddRedis("redis")
 // ---------- Мікросервіси (ім'я ресурсу = логічне ім'я для service discovery) ----------
 var bookings = builder.AddProject<Projects.Bookings_Api>("bookings-api")
        .WithReference(bookingDb).WaitFor(bookingDb)
-       .WithEnvironment("Database__ApplyScripts", "true");    // порожня БД -> скрипти db/p1 Лаб. 01
+       .WithEnvironment("Database__ApplyScripts", "true")     // порожня БД -> скрипти db/p1 Лаб. 01
+       .WithHttpHealthCheck("/health/ready");                 // Лаб. 07: Dashboard показує стан, WaitFor чекає Healthy
 
 var catalog = builder.AddProject<Projects.Catalog_Api>("catalog-api")
        .WithReference(catalogDb).WaitFor(catalogDb)           // схема — міграцією EF Core
-       .WithReference(redis).WaitFor(redis);                  // дворівневий кеш L1 → L2 (Redis)
+       .WithReference(redis).WaitFor(redis)                   // дворівневий кеш L1 → L2 (Redis)
+       .WithHttpHealthCheck("/health/ready");
 
 var reviews = builder.AddProject<Projects.Reviews_WebApi>("reviews-api")
-       .WithReference(reviewsDb).WaitFor(reviewsDb);          // індекси й сідінг — сам сервіс
+       .WithReference(reviewsDb).WaitFor(reviewsDb)           // індекси й сідінг — сам сервіс
+       .WithHttpHealthCheck("/health/ready");
 
 // ---------- Aggregator: опитує сервіси паралельно ----------
 var aggregator = builder.AddProject<Projects.Platform_Aggregator>("aggregator")
        .WithReference(bookings).WithReference(catalog).WithReference(reviews)
        .WithReference(redis).WaitFor(redis)                   // кеш агрегованих відповідей (TTL 30 с)
-       .WaitFor(bookings).WaitFor(catalog).WaitFor(reviews);
+       .WaitFor(bookings).WaitFor(catalog).WaitFor(reviews)   // тепер чекає Healthy, а не лише запущений
+       .WithHttpHealthCheck("/health/ready");
 
 // ---------- API Gateway: єдина точка входу на ФІКСОВАНОМУ порту ----------
 // 5050, а не 5000: на macOS порт 5000 зайнятий AirPlay Receiver.
@@ -51,6 +55,7 @@ builder.AddProject<Projects.Platform_ApiGateway>("gateway")
        .WithExternalHttpEndpoints()
        .WithReference(bookings).WithReference(catalog).WithReference(reviews)
        .WithReference(aggregator)
-       .WaitFor(aggregator);
+       .WaitFor(aggregator)
+       .WithHttpHealthCheck("/health/live");
 
 builder.Build().Run();

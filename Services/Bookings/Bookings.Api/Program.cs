@@ -1,5 +1,7 @@
 using System.Reflection;
 using Bookings.Api.Grpc;
+using Bookings.Api.HealthChecks;
+using Bookings.Api.Metrics;
 using Bookings.Api.Middleware;
 using Bookings.Bll.Interfaces;
 using Bookings.Bll.Mapping;
@@ -24,8 +26,16 @@ var connectionString = builder.Configuration.GetConnectionString("CinemaBooking"
 builder.Services.AddScoped<IUnitOfWork>(_ => new UnitOfWork(connectionString));
 // Сервіси BLL — Scoped (залежать від UoW)
 builder.Services.AddScoped<ICustomerService, CustomerService>();
-builder.Services.AddScoped<IBookingService, BookingService>();
-builder.Services.AddScoped<IPaymentService, PaymentService>();
+builder.Services.AddScoped<BookingService>();
+builder.Services.AddScoped<PaymentService>();
+// Лаб. 07: метрики — декоратори над BLL (тривалість усіх операцій + бізнес-лічильники)
+builder.Services.AddScoped<IBookingService>(sp => new MeteredBookingService(sp.GetRequiredService<BookingService>(), sp.GetRequiredService<BookingMetrics>()));
+builder.Services.AddScoped<IPaymentService>(sp => new MeteredPaymentService(sp.GetRequiredService<PaymentService>(), sp.GetRequiredService<BookingMetrics>()));
+builder.Services.AddSingleton<BookingMetrics>();
+builder.Services.AddHostedService<BookingsSnapshotService>();
+
+// ---------- Health checks (Лаб. 07): booking-db (SELECT 1) + gRPC Health Checking Protocol ----------
+builder.Services.AddBookingHealthChecks(connectionString);
 builder.Services.AddScoped<IShowtimeService, ShowtimeService>();
 builder.Services.AddSingleton(TimeProvider.System);
 
@@ -82,6 +92,7 @@ if (app.Environment.IsDevelopment())
 
 app.MapControllers();
 app.MapGrpcService<BookingGrpcService>();
+app.MapGrpcHealthChecksService();
 app.MapDefaultEndpoints();
 app.MapGet("/", () => Results.Redirect("/swagger")).ExcludeFromDescription();
 

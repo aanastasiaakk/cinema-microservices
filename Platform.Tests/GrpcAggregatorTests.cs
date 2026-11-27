@@ -23,6 +23,8 @@ public sealed class GrpcAggregatorTests : IAsyncLifetime
     private sealed class State
     {
         public readonly ConcurrentDictionary<string, bool> Down = new();
+        /// <summary>Хост (bookings.test, catalog.test, reviews.test), що відповідає NOT_SERVING на grpc.health.v1.</summary>
+        public readonly ConcurrentDictionary<string, bool> NotServing = new();
         public readonly ConcurrentBag<(string Method, string? CorrelationId)> Calls = [];
         public int ShowtimeBatchCalls;
 
@@ -106,6 +108,21 @@ public sealed class GrpcAggregatorTests : IAsyncLifetime
         }
     }
 
+    /// <summary>Стандартний gRPC Health Checking Protocol: статус за хостом, до якого звернувся клієнт.</summary>
+    private sealed class FakeHealth(State state) : Grpc.Health.V1.Health.HealthBase
+    {
+        public override Task<Grpc.Health.V1.HealthCheckResponse> Check(Grpc.Health.V1.HealthCheckRequest request, ServerCallContext context)
+        {
+            var host = context.Host.Split(':')[0];
+            return Task.FromResult(new Grpc.Health.V1.HealthCheckResponse
+            {
+                Status = state.NotServing.ContainsKey(host)
+                    ? Grpc.Health.V1.HealthCheckResponse.Types.ServingStatus.NotServing
+                    : Grpc.Health.V1.HealthCheckResponse.Types.ServingStatus.Serving
+            });
+        }
+    }
+
     private readonly State _state = new();
     private WebApplication _grpcHost = null!;
     private HttpClient _client = null!;
@@ -120,6 +137,7 @@ public sealed class GrpcAggregatorTests : IAsyncLifetime
         _grpcHost.MapGrpcService<FakeBookings>();
         _grpcHost.MapGrpcService<FakeCatalog>();
         _grpcHost.MapGrpcService<FakeReviews>();
+        _grpcHost.MapGrpcService<FakeHealth>();
         await _grpcHost.StartAsync();
         var grpcHandler = _grpcHost.GetTestServer().CreateHandler();
 
@@ -197,5 +215,42 @@ public sealed class GrpcAggregatorTests : IAsyncLifetime
         var request = new HttpRequestMessage(HttpMethod.Get, "/api/aggregator/bookings/1/full");
         request.Headers.Add("Cache-Control", "no-cache");
         Assert.Equal(HttpStatusCode.ServiceUnavailable, (await _client.SendAsync(request)).StatusCode);
+    }
+
+    private async Task<(HttpStatusCode Code, JsonElement Json)> HealthAsync(string path)
+    {
+        var response = await _client.GetAsync(path);
+        return (response.StatusCode, JsonDocument.Parse(await response.Content.ReadAsStringAsync()).RootElement);
+    }
+
+    private static string StatusOf(JsonElement json, string check) =>
+        json.GetProperty("checks").EnumerateArray().Single(c => c.GetProperty("name").GetString() == check).GetProperty("status").GetString()!;
+
+    [Fact]
+    public async Task Liveness_has_no_dependencies_and_readiness_checks_downstream_over_grpc_health()
+    {
+        var (liveCode, live) = await HealthAsync("/health/live");
+        Assert.Equal(HttpStatusCode.OK, liveCode);
+        Assert.Equal(["self"], live.GetProperty("checks").EnumerateArray().Select(c => c.GetProperty("name").GetString()));
+
+        var (readyCode, ready) = await HealthAsync("/health/ready");
+        Assert.Equal(HttpStatusCode.OK, readyCode);
+        Assert.Equal("Healthy", ready.GetProperty("status").GetString());
+        Assert.Equal("Healthy", StatusOf(ready, "catalog-api"));
+    }
+
+    [Fact]
+    public async Task Non_critical_reviews_makes_readiness_degraded_but_critical_catalog_makes_it_unhealthy()
+    {
+        _state.NotServing["reviews.test"] = true;
+        var (code, ready) = await HealthAsync("/health/ready");
+        Assert.Equal(HttpStatusCode.OK, code);                                                     // Degraded = 200
+        Assert.Equal("Degraded", ready.GetProperty("status").GetString());
+        Assert.Equal("Degraded", StatusOf(ready, "reviews-api"));
+
+        _state.NotServing["catalog.test"] = true;
+        var (code2, ready2) = await HealthAsync("/health/ready");
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, code2);
+        Assert.Equal("Unhealthy", StatusOf(ready2, "catalog-api"));
     }
 }

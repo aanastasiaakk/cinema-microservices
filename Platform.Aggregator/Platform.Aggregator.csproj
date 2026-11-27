@@ -3,14 +3,18 @@
        Посилається ЛИШЕ на ServiceDefaults. -->
   <PropertyGroup>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
-    <NoWarn>$(NoWarn);1591</NoWarn>
+    <!-- EXTEXP0001: RemoveAllResilienceHandlers позначено як experimental, але саме його Microsoft рекомендує,
+         щоб замінити стандартний обробник ServiceDefaults власним без нашарування pipeline-ів -->
+    <NoWarn>$(NoWarn);1591;EXTEXP0001</NoWarn>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\Platform.ServiceDefaults\Platform.ServiceDefaults.csproj" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Aspire.StackExchange.Redis.DistributedCaching" Version="13.6.5" />
+    <PackageReference Include="AspNetCore.HealthChecks.Redis" Version="9.0.0" />
     <PackageReference Include="Google.Protobuf" Version="3.36.2" />
+    <PackageReference Include="Grpc.HealthCheck" Version="2.85.0" />
     <PackageReference Include="Grpc.Net.ClientFactory" Version="2.85.0" />
     <PackageReference Include="Grpc.Tools" Version="2.85.0">
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
