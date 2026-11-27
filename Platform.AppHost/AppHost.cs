@@ -1,4 +1,4 @@
-// Оркестрація платформи .NET Aspire: одна команда піднімає бази даних, три мікросервіси,
+// Оркестрація платформи .NET Aspire: одна команда піднімає бази даних, Redis, три мікросервіси,
 // Aggregator і API Gateway.   dotnet run --project Platform.AppHost
 // Порядок запуску (WaitFor): БД → сервіси → Aggregator → Gateway.
 var builder = DistributedApplication.CreateBuilder(args);
@@ -21,13 +21,19 @@ var mongo = builder.AddMongoDB("mongo")
                    .WithLifetime(ContainerLifetime.Persistent);
 var reviewsDb = mongo.AddDatabase("reviewsdb", databaseName: "cinema_reviews");   // Лаб. 04
 
+// ---------- Redis (Лаб. 06): L2-кеш каталогу і кеш агрегованих відповідей ----------
+var redis = builder.AddRedis("redis")
+                   .WithDataVolume("cinema-redis-data")
+                   .WithLifetime(ContainerLifetime.Persistent);
+
 // ---------- Мікросервіси (ім'я ресурсу = логічне ім'я для service discovery) ----------
 var bookings = builder.AddProject<Projects.Bookings_Api>("bookings-api")
        .WithReference(bookingDb).WaitFor(bookingDb)
        .WithEnvironment("Database__ApplyScripts", "true");    // порожня БД -> скрипти db/p1 Лаб. 01
 
 var catalog = builder.AddProject<Projects.Catalog_Api>("catalog-api")
-       .WithReference(catalogDb).WaitFor(catalogDb);          // схема — міграцією EF Core
+       .WithReference(catalogDb).WaitFor(catalogDb)           // схема — міграцією EF Core
+       .WithReference(redis).WaitFor(redis);                  // дворівневий кеш L1 → L2 (Redis)
 
 var reviews = builder.AddProject<Projects.Reviews_WebApi>("reviews-api")
        .WithReference(reviewsDb).WaitFor(reviewsDb);          // індекси й сідінг — сам сервіс
@@ -35,6 +41,7 @@ var reviews = builder.AddProject<Projects.Reviews_WebApi>("reviews-api")
 // ---------- Aggregator: опитує сервіси паралельно ----------
 var aggregator = builder.AddProject<Projects.Platform_Aggregator>("aggregator")
        .WithReference(bookings).WithReference(catalog).WithReference(reviews)
+       .WithReference(redis).WaitFor(redis)                   // кеш агрегованих відповідей (TTL 30 с)
        .WaitFor(bookings).WaitFor(catalog).WaitFor(reviews);
 
 // ---------- API Gateway: єдина точка входу на ФІКСОВАНОМУ порту ----------

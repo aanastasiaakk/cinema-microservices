@@ -4,6 +4,7 @@ using MongoDB.Driver;
 using Reviews.Application;
 using Reviews.Infrastructure;
 using Reviews.WebApi.Contracts;
+using Reviews.WebApi.Grpc;
 using Reviews.WebApi.Infrastructure;
 using Serilog;
 
@@ -26,6 +27,13 @@ builder.Services.AddAutoMapper(cfg =>
     var key = builder.Configuration["LuckyPenny:LicenseKey"];
     if (!string.IsNullOrWhiteSpace(key)) cfg.LicenseKey = key;
 }, typeof(RequestProfile).Assembly);
+
+// ---------- gRPC (Лаб. 06): окремий endpoint лише HTTP/2 (Kestrel:Endpoints:grpc в appsettings.json) ----------
+builder.Services.AddGrpc(o =>
+{
+    o.Interceptors.Add<GrpcLoggingInterceptor>();
+    o.EnableDetailedErrors = builder.Environment.IsDevelopment();
+});
 
 builder.Services.AddControllers();
 builder.Services.AddProblemDetails(o => o.CustomizeProblemDetails = ctx =>
@@ -58,6 +66,7 @@ if (!app.Environment.IsProduction())
 }
 
 app.MapControllers();
+app.MapGrpcService<ReviewsGrpcService>();
 app.MapDefaultEndpoints();                                  // /health (з перевіркою MongoDB) і /alive
 app.MapGet("/", () => Results.Redirect("/swagger")).ExcludeFromDescription();
 

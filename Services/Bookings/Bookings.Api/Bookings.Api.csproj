@@ -5,6 +5,7 @@
     <NoWarn>$(NoWarn);1591</NoWarn>
   </PropertyGroup>
   <ItemGroup>
+    <PackageReference Include="Grpc.AspNetCore" Version="2.85.0" />
     <PackageReference Include="Serilog.AspNetCore" Version="10.0.0" />
     <PackageReference Include="Swashbuckle.AspNetCore" Version="10.3.1" />
   </ItemGroup>
@@ -16,5 +17,8 @@
     <!-- SQL-скрипти Лаб. 01 (db/p1) копіюються у вихідну папку для ініціалізації порожньої БД
          в контейнері Aspire. Файли НЕ дублюються в репозиторії — це посилання. -->
     <Content Include="..\..\..\db\p1\schema.sql;..\..\..\db\p1\procedures.sql;..\..\..\db\p1\seed.sql" Link="db\p1\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+  <ItemGroup>
+    <Protobuf Include="Protos\booking.proto" GrpcServices="Server" />
   </ItemGroup>
 </Project>

@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using Grpc.Core;
 using Platform.Aggregator.Clients;
 using Platform.Aggregator.Models;
 
@@ -13,23 +14,24 @@ public sealed class UpstreamUnavailableException(string service, Exception inner
 }
 
 /// <summary>
-/// Aggregator Pattern: картка бронювання з трьох сервісів.
+/// Aggregator Pattern: картка бронювання з трьох сервісів (транспорт — gRPC або HTTP, див. IBookingCardSource).
 ///  1) bookings-api: бронювання (обов'язкове; 404 → null, недоступний → 503);
 ///  2) ПАРАЛЕЛЬНО (Task.WhenAll): клієнт (bookings-api) і всі сеанси бронювання (catalog-api);
 ///  3) ПАРАЛЕЛЬНО (Task.WhenAll) для кожного фільму: фільм (catalog-api), рейтинг і останні відгуки (reviews-api).
-/// Недоступність catalog-api чи reviews-api не валить запит: повертаються доступні дані + Warnings.
+/// Недоступність catalog-api чи reviews-api не валить запит: повертаються доступні дані + Warnings
+/// (RpcException Unavailable / DeadlineExceeded для gRPC, HttpRequestException / timeout для HTTP).
 /// CancellationToken передається в усі виклики; кожен виклик логується з тривалістю.
 /// </summary>
-public sealed class BookingCardAggregator(BookingsClient bookings, CatalogClient catalog, ReviewsClient reviews,
-                                          ILogger<BookingCardAggregator> logger)
+public sealed class BookingCardAggregator(ILogger<BookingCardAggregator> logger)
 {
     public static readonly ActivitySource Source = new("Cinema.Aggregator");
     private const int LatestReviews = 3;
 
-    public async Task<FullBookingDto?> GetFullBookingAsync(long bookingId, CancellationToken ct)
+    public async Task<FullBookingDto?> GetFullBookingAsync(IBookingCardSource source, long bookingId, CancellationToken ct)
     {
         using var activity = Source.StartActivity("AggregateBookingCard");
         activity?.SetTag("booking.id", bookingId);
+        activity?.SetTag("aggregation.transport", source.Transport);
         var warnings = new ConcurrentQueue<string>();
 
         // 1) кореневі дані
@@ -37,7 +39,7 @@ public sealed class BookingCardAggregator(BookingsClient bookings, CatalogClient
         try
         {
             booking = await TimedAsync(BookingsClient.ServiceName, $"booking {bookingId}",
-                () => bookings.GetBookingAsync(bookingId, ct));
+                () => source.GetBookingAsync(bookingId, ct));
         }
         catch (Exception ex) when (IsUpstreamFailure(ex, ct))
         {
@@ -48,20 +50,20 @@ public sealed class BookingCardAggregator(BookingsClient bookings, CatalogClient
         // 2) паралельно: клієнт + сеанси
         var showtimeIds = booking.Tickets.Select(t => t.ShowtimeId).Distinct().ToList();
         var customerTask = SafeAsync(BookingsClient.ServiceName, $"customer {booking.CustomerId}",
-            () => bookings.GetCustomerAsync(booking.CustomerId, ct), warnings, ct);
-        var showtimesTask = Task.WhenAll(showtimeIds.Select(id => SafeAsync(CatalogClient.ServiceName, $"showtime {id}",
-            () => catalog.GetShowtimeAsync(id, ct), warnings, ct)));
+            () => source.GetCustomerAsync(booking.CustomerId, ct), warnings, ct);
+        var showtimesTask = SafeAsync(CatalogClient.ServiceName, $"showtimes {string.Join(",", showtimeIds)}",
+            () => source.GetShowtimesAsync(showtimeIds, ct), warnings, ct);
         await Task.WhenAll(customerTask, showtimesTask);
         var customer = await customerTask;
-        var showtimes = (await showtimesTask)
-            .Where(s => s is not null && showtimeIds.Contains(s.Id))           // узгодженість: лише сеанси цього бронювання
-            .ToDictionary(s => s!.Id, s => s!);
+        var showtimes = ((await showtimesTask) ?? [])
+            .Where(s => showtimeIds.Contains(s.Id))                             // узгодженість: лише сеанси цього бронювання
+            .ToDictionary(s => s.Id);
 
         // 3) паралельно для кожного фільму (і всередині — паралельно каталог + рейтинг + відгуки)
         var movieIds = showtimes.Values.Select(s => s.MovieId).Distinct().ToList();
         if (movieIds.Count == 0 && showtimeIds.Count > 0)
             warnings.Enqueue("Movie details and reviews are unavailable because showtimes could not be loaded from catalog-api");
-        var movieData = (await Task.WhenAll(movieIds.Select(id => LoadMovieAsync(id, warnings, ct))))
+        var movieData = (await Task.WhenAll(movieIds.Select(id => LoadMovieAsync(source, id, warnings, ct))))
             .ToDictionary(m => m.MovieId);
 
         var reviewsDown = warnings.Any(w => w.StartsWith(ReviewsClient.ServiceName, StringComparison.Ordinal));
@@ -107,12 +109,12 @@ public sealed class BookingCardAggregator(BookingsClient bookings, CatalogClient
     private sealed record MovieData(long MovieId, MovieResponse? Movie, MovieRatingResponse? Rating, ReviewsPageResponse? Latest);
 
     /// <summary>Фільм із каталогу і думка глядачів — три незалежні виклики паралельно.</summary>
-    private async Task<MovieData> LoadMovieAsync(long movieId, ConcurrentQueue<string> warnings, CancellationToken ct)
+    private async Task<MovieData> LoadMovieAsync(IBookingCardSource source, long movieId, ConcurrentQueue<string> warnings, CancellationToken ct)
     {
-        var movieTask = SafeAsync(CatalogClient.ServiceName, $"movie {movieId}", () => catalog.GetMovieAsync(movieId, ct), warnings, ct);
-        var ratingTask = SafeAsync(ReviewsClient.ServiceName, $"rating of movie {movieId}", () => reviews.GetRatingAsync(movieId, ct), warnings, ct);
+        var movieTask = SafeAsync(CatalogClient.ServiceName, $"movie {movieId}", () => source.GetMovieAsync(movieId, ct), warnings, ct);
+        var ratingTask = SafeAsync(ReviewsClient.ServiceName, $"rating of movie {movieId}", () => source.GetRatingAsync(movieId, ct), warnings, ct);
         var latestTask = SafeAsync(ReviewsClient.ServiceName, $"latest reviews of movie {movieId}",
-            () => reviews.GetLatestReviewsAsync(movieId, LatestReviews, ct), warnings, ct);
+            () => source.GetLatestReviewsAsync(movieId, LatestReviews, ct), warnings, ct);
         await Task.WhenAll(movieTask, ratingTask, latestTask);
         return new MovieData(movieId, await movieTask, await ratingTask, await latestTask);
     }
@@ -139,6 +141,14 @@ public sealed class BookingCardAggregator(BookingsClient bookings, CatalogClient
         {
             return await TimedAsync(service, what, call);
         }
+        catch (RpcException ex) when (ex.StatusCode is StatusCode.Unavailable or StatusCode.DeadlineExceeded
+                                          or StatusCode.Internal or StatusCode.Unknown or StatusCode.ResourceExhausted)
+        {
+            logger.LogWarning("{Service} gRPC call for {Resource} failed with {GrpcStatus} after {ElapsedMs} ms: {Detail}",
+                service, what, ex.StatusCode, sw.ElapsedMilliseconds, ex.Status.Detail);
+            warnings.Enqueue($"{service} is unavailable: {what} could not be loaded");
+            return default;
+        }
         catch (Exception ex) when (IsUpstreamFailure(ex, ct))
         {
             logger.LogWarning(ex, "{Service} is unavailable for {Resource} after {ElapsedMs} ms: {Error}",
@@ -150,5 +160,6 @@ public sealed class BookingCardAggregator(BookingsClient bookings, CatalogClient
 
     /// <summary>Будь-яка помилка виклику, КРІМ скасування самим клієнтом (тоді скасовуємо все).</summary>
     private static bool IsUpstreamFailure(Exception ex, CancellationToken ct)
-        => !(ex is OperationCanceledException && ct.IsCancellationRequested);
+        => !(ex is OperationCanceledException && ct.IsCancellationRequested)
+           && !(ex is RpcException { StatusCode: StatusCode.Cancelled } && ct.IsCancellationRequested);
 }

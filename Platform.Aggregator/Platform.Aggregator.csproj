@@ -9,6 +9,19 @@
     <ProjectReference Include="..\Platform.ServiceDefaults\Platform.ServiceDefaults.csproj" />
   </ItemGroup>
   <ItemGroup>
+    <PackageReference Include="Aspire.StackExchange.Redis.DistributedCaching" Version="13.6.5" />
+    <PackageReference Include="Google.Protobuf" Version="3.36.2" />
+    <PackageReference Include="Grpc.Net.ClientFactory" Version="2.85.0" />
+    <PackageReference Include="Grpc.Tools" Version="2.85.0">
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
     <PackageReference Include="Swashbuckle.AspNetCore" Version="10.3.1" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- ті самі контракти сервісів, лише клієнтська частина -->
+    <Protobuf Include="..\Services\Bookings\Bookings.Api\Protos\booking.proto" GrpcServices="Client" Link="Protos\booking.proto" />
+    <Protobuf Include="..\Services\Catalog\Catalog.Api\Protos\catalog.proto" GrpcServices="Client" Link="Protos\catalog.proto" />
+    <Protobuf Include="..\Services\Reviews\Reviews.WebApi\Protos\reviews.proto" GrpcServices="Client" Link="Protos\reviews.proto" />
   </ItemGroup>
 </Project>

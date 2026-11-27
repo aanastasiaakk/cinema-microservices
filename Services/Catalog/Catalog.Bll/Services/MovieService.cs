@@ -1,3 +1,4 @@
+using Catalog.Bll.Caching;
 using Catalog.Bll.Diagnostics;
 using AutoMapper;
 using Catalog.Bll.Dto;
@@ -15,7 +16,7 @@ namespace Catalog.Bll.Services;
 /// Правила самої сутності (ціна &gt; 0, один основний жанр) перевіряє Movie; сервіс перевіряє правила,
 /// для яких потрібні інші дані з БД (унікальність назви+року, існування жанрів, наявність сеансів).
 /// </summary>
-public sealed class MovieService(IUnitOfWork uow, IMapper mapper, TimeProvider clock,
+public sealed class MovieService(IUnitOfWork uow, IMapper mapper, TimeProvider clock, ITwoLevelCache cache,
                                  ILogger<MovieService> logger) : IMovieService
 {
     public async Task<PagedResult<MovieListItemDto>> GetListAsync(MovieQuery query, CancellationToken ct)
@@ -30,8 +31,10 @@ public sealed class MovieService(IUnitOfWork uow, IMapper mapper, TimeProvider c
                                                  total, query.Page, pageSize);
     }
 
-    public async Task<MovieDto> GetByIdAsync(long id, CancellationToken ct)
-        => mapper.Map<MovieDto>(await GetWithDetailsOrThrowAsync(id, ct));
+    /// <summary>Cache-aside для read-heavy картки фільму: catalog:movie:{id} — L1 → L2 → БД (Eager Loading).</summary>
+    public Task<MovieDto> GetByIdAsync(long id, CancellationToken ct)
+        => cache.GetOrCreateAsync(CacheKeys.Movie(id), CachePolicy.Movie,
+            async token => mapper.Map<MovieDto>(await GetWithDetailsOrThrowAsync(id, token)), ct);
 
     public async Task<MovieDto> CreateAsync(CreateMovieDto input, CancellationToken ct)
     {
@@ -70,6 +73,7 @@ public sealed class MovieService(IUnitOfWork uow, IMapper mapper, TimeProvider c
         var old = movie.BasePrice;
         movie.ChangePrice(price);                                    // правило ціни — у сутності
         await uow.SaveChangesAsync(ct);
+        await cache.InvalidateAsync("MoviePriceChanged", ct, CacheKeys.Movie(id));
         logger.LogInformation("Movie {MovieId} price changed {OldPrice} -> {NewPrice}", id, old, price);
     }
 
@@ -78,6 +82,7 @@ public sealed class MovieService(IUnitOfWork uow, IMapper mapper, TimeProvider c
         var movie = await GetWithDetailsOrThrowAsync(id, ct);       // потрібні сеанси для правила
         movie.Deactivate(clock.GetUtcNow().UtcDateTime);
         await uow.SaveChangesAsync(ct);
+        await cache.InvalidateAsync("MovieDeactivated", ct, CacheKeys.Movie(id));
         logger.LogInformation("Movie {MovieId} deactivated", id);
     }
 
@@ -86,6 +91,7 @@ public sealed class MovieService(IUnitOfWork uow, IMapper mapper, TimeProvider c
         var movie = await uow.Movies.GetByIdAsync(id, ct) ?? throw new EntityNotFoundException(nameof(Movie), id);
         movie.Activate();
         await uow.SaveChangesAsync(ct);
+        await cache.InvalidateAsync("MovieActivated", ct, CacheKeys.Movie(id));
     }
 
     public async Task<MovieDto> AddGenreAsync(long id, AddMovieGenreDto input, CancellationToken ct)
@@ -96,6 +102,7 @@ public sealed class MovieService(IUnitOfWork uow, IMapper mapper, TimeProvider c
 
         movie.AddGenre(input.GenreId, input.IsPrimary, clock.GetUtcNow().UtcDateTime);
         await uow.SaveChangesAsync(ct);
+        await cache.InvalidateAsync("MovieGenreAdded", ct, CacheKeys.Movie(id));
         logger.LogInformation("Genre {GenreId} added to movie {MovieId} (primary: {IsPrimary})",
             input.GenreId, id, input.IsPrimary);
         return await GetByIdAsync(id, ct);
@@ -106,6 +113,7 @@ public sealed class MovieService(IUnitOfWork uow, IMapper mapper, TimeProvider c
         var movie = await GetWithDetailsOrThrowAsync(id, ct);
         movie.RemoveGenre(genreId);
         await uow.SaveChangesAsync(ct);
+        await cache.InvalidateAsync("MovieGenreRemoved", ct, CacheKeys.Movie(id));
     }
 
     public async Task DeleteAsync(long id, CancellationToken ct)
@@ -118,6 +126,7 @@ public sealed class MovieService(IUnitOfWork uow, IMapper mapper, TimeProvider c
 
         uow.Movies.Delete(movie);
         await uow.SaveChangesAsync(ct);
+        await cache.InvalidateAsync("MovieDeleted", ct, CacheKeys.Movie(id));
         logger.LogInformation("Movie {MovieId} deleted", id);
     }
 

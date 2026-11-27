@@ -40,6 +40,7 @@ public static class Extensions
 
         builder.Services.AddServiceDiscovery();
         builder.Services.AddHttpContextAccessor();
+        builder.Services.AddSingleton<CacheMetrics>();                // cache.hits / cache.misses (Лаб. 06)
         builder.Services.AddTransient<CorrelationIdHandler>();
         builder.Services.ConfigureHttpClientDefaults(http =>
         {
@@ -70,6 +71,7 @@ public static class Extensions
             .MinimumLevel.Override("Polly", LogEventLevel.Warning)
             .MinimumLevel.Override("Microsoft.Extensions.Http", LogEventLevel.Warning)
             .MinimumLevel.Override("Microsoft.Extensions.ServiceDiscovery", LogEventLevel.Warning)
+            .MinimumLevel.Override("Grpc", LogEventLevel.Warning)                 // власні логи gRPC — interceptor
             .MinimumLevel.Override("Microsoft.AspNetCore.Diagnostics.ExceptionHandlerMiddleware", LogEventLevel.Fatal)
             .ReadFrom.Configuration(builder.Configuration)
             .Enrich.FromLogContext()
@@ -99,6 +101,8 @@ public static class Extensions
                 ["deployment.environment"] = builder.Environment.EnvironmentName
             }))
             .WithMetrics(metrics => metrics
+                .AddMeter(CacheMetrics.MeterName)                                      // cache.hits / cache.misses (L1/L2)
+                .AddMeter(CinemaActivitySourcePrefix + "*")
                 .AddAspNetCoreInstrumentation()
                 .AddHttpClientInstrumentation()
                 .AddRuntimeInstrumentation())
@@ -114,8 +118,9 @@ public static class Extensions
                     .AddAspNetCoreInstrumentation(o =>
                         o.Filter = ctx => !ctx.Request.Path.StartsWithSegments(HealthEndpointPath)
                                           && !ctx.Request.Path.StartsWithSegments(AlivenessEndpointPath))
-                    .AddHttpClientInstrumentation()
+                    .AddHttpClientInstrumentation()                                        // у т. ч. клієнтські gRPC-виклики
                     .AddSqlClientInstrumentation();                                        // Dapper (Лаб. 02) і EF Core (Лаб. 03)
+                // команди Redis (Лаб. 06) трасує сама Aspire-інтеграція AddRedisDistributedCache
             });
 
         // адресу OTLP-колектора (Aspire Dashboard) задає AppHost; експорт батчевий і не блокує запити

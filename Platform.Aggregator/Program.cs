@@ -1,3 +1,5 @@
+using Platform.Aggregator.Caching;
+using Platform.Aggregator.Grpc;
 using System.Reflection;
 using System.Text.Json.Serialization;
 using Microsoft.Extensions.Http.Resilience;
@@ -8,7 +10,25 @@ var builder = WebApplication.CreateBuilder(args);
 
 builder.AddServiceDefaults();                       // Serilog, OpenTelemetry, service discovery, CorrelationIdHandler, стійкість
 
-// Typed HttpClients: логічні імена ресурсів Aspire замість localhost:port
+// ---------- gRPC-клієнти (Лаб. 06): згенеровані з .proto сервісів, адреса — логічне ім'я ресурсу ----------
+// "http://_grpc.catalog-api" = іменований endpoint "grpc" (HTTP/2) ресурсу catalog-api через service discovery.
+// Фабрика HttpClient та сама, тож діють налаштування ServiceDefaults: service discovery, стійкість, CorrelationIdHandler.
+builder.Services.AddGrpcClient<Bookings.Grpc.BookingService.BookingServiceClient>(o => o.Address = new Uri($"http://_grpc.{BookingsClient.ServiceName}"));
+builder.Services.AddGrpcClient<Catalog.Grpc.CatalogService.CatalogServiceClient>(o => o.Address = new Uri($"http://_grpc.{CatalogClient.ServiceName}"));
+builder.Services.AddGrpcClient<Reviews.Grpc.ReviewsService.ReviewsServiceClient>(o => o.Address = new Uri($"http://_grpc.{ReviewsClient.ServiceName}"));
+
+// ---------- Redis: кеш агрегованих відповідей (TTL 30 с) ----------
+if (!string.IsNullOrWhiteSpace(builder.Configuration.GetConnectionString("redis")))
+    builder.AddRedisDistributedCache("redis", configureOptions: o =>
+    {
+        o.AbortOnConnectFail = false;
+        o.ConnectTimeout = 2000;
+        o.AsyncTimeout = 2000;
+    });
+else
+    builder.Services.AddDistributedMemoryCache();       // без Aspire / у тестах
+
+// ---------- Typed HttpClients (Лаб. 05): залишені для порівняння HTTP і gRPC (?transport=http) ----------
 builder.Services.AddHttpClient<BookingsClient>(c => c.BaseAddress = new Uri($"https+http://{BookingsClient.ServiceName}"));
 builder.Services.AddHttpClient<CatalogClient>(c => c.BaseAddress = new Uri($"https+http://{CatalogClient.ServiceName}"));
 builder.Services.AddHttpClient<ReviewsClient>(c => c.BaseAddress = new Uri($"https+http://{ReviewsClient.ServiceName}"));
@@ -25,6 +45,9 @@ builder.Services.ConfigureAll<HttpStandardResilienceOptions>(o =>
 });
 
 builder.Services.AddScoped<BookingCardAggregator>();
+builder.Services.AddScoped<GrpcBookingCardSource>();
+builder.Services.AddScoped<HttpBookingCardSource>();
+builder.Services.AddSingleton<AggregatedResponseCache>();
 
 builder.Services.AddControllers().AddJsonOptions(o =>
     o.JsonSerializerOptions.DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull);   // camelCase за замовчуванням

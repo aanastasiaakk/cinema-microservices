@@ -1,4 +1,5 @@
 using System.Reflection;
+using Bookings.Api.Grpc;
 using Bookings.Api.Middleware;
 using Bookings.Bll.Interfaces;
 using Bookings.Bll.Mapping;
@@ -33,6 +34,13 @@ builder.Services.AddAutoMapper(cfg =>
 {
     cfg.LicenseKey = builder.Configuration["AutoMapper:LicenseKey"];
 }, typeof(BookingProfile).Assembly);
+
+// ---------- gRPC (Лаб. 06): окремий endpoint лише HTTP/2 (Kestrel:Endpoints:grpc в appsettings.json) ----------
+builder.Services.AddGrpc(o =>
+{
+    o.Interceptors.Add<GrpcLoggingInterceptor>();
+    o.EnableDetailedErrors = builder.Environment.IsDevelopment();
+});
 
 builder.Services.AddControllers();
 
@@ -73,6 +81,7 @@ if (app.Environment.IsDevelopment())
 }
 
 app.MapControllers();
+app.MapGrpcService<BookingGrpcService>();
 app.MapDefaultEndpoints();
 app.MapGet("/", () => Results.Redirect("/swagger")).ExcludeFromDescription();
 

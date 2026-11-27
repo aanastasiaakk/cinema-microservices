@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Reflection;
+using Catalog.Api.Grpc;
 using Catalog.Api.Middleware;
 using Catalog.Bll;
 using Catalog.Dal;
@@ -27,6 +28,31 @@ builder.Services.AddDbContext<CatalogDbContext>(o => o
         // свідомо ОДИН запит з JOIN-ами для Include (Eager Loading = 1 SQL-команда в лозі)
         .UseQuerySplittingBehavior(QuerySplittingBehavior.SingleQuery))
     .EnableSensitiveDataLogging(builder.Environment.IsDevelopment()));   // значення параметрів SQL — лише в Development
+
+// ---------- Кешування (Лаб. 06): L1 — пам'ять процесу з обмеженням розміру, L2 — Redis ----------
+builder.Services.AddMemoryCache(o =>
+{
+    o.SizeLimit = 10_000;                                     // ≈ 10 МБ: кожен запис має Size ≈ КБ серіалізованого DTO
+    o.CompactionPercentage = 0.25;                            // при переповненні витіснити 25 % (спершу Low/Normal priority)
+    o.ExpirationScanFrequency = TimeSpan.FromMinutes(1);
+});
+if (!string.IsNullOrWhiteSpace(builder.Configuration.GetConnectionString("redis")))
+    builder.AddRedisDistributedCache("redis", configureOptions: o =>    // ConnectionStrings:redis від Aspire
+    {
+        o.AbortOnConnectFail = false;                         // Redis недоступний → сервіс працює далі (без L2)
+        o.ConnectTimeout = 2000;
+        o.SyncTimeout = 2000;
+        o.AsyncTimeout = 2000;
+    });
+else
+    builder.Services.AddDistributedMemoryCache();             // запуск без Aspire/Redis: L2 у пам'яті процесу
+
+// ---------- gRPC (Лаб. 06): окремий endpoint лише HTTP/2 (див. Kestrel:Endpoints в appsettings.json) ----------
+builder.Services.AddGrpc(o =>
+{
+    o.Interceptors.Add<GrpcLoggingInterceptor>();
+    o.EnableDetailedErrors = builder.Environment.IsDevelopment();
+});
 
 // ---------- DI: Unit of Work і сервіси — Scoped (один DbContext на запит) ----------
 builder.Services.AddScoped<IUnitOfWork, UnitOfWork>();
@@ -81,6 +107,7 @@ if (app.Environment.IsDevelopment())
 }
 
 app.MapControllers();
+app.MapGrpcService<CatalogGrpcService>();
 app.MapDefaultEndpoints();
 app.MapGet("/", () => Results.Redirect("/swagger")).ExcludeFromDescription();
 

@@ -9,12 +9,12 @@ using Microsoft.Extensions.Logging;
 
 namespace Catalog.Bll.Services;
 
-public sealed class GenreService(IUnitOfWork uow, IMapper mapper, CatalogCache cache, TimeProvider clock,
+public sealed class GenreService(IUnitOfWork uow, IMapper mapper, ITwoLevelCache cache, TimeProvider clock,
                                  ILogger<GenreService> logger) : IGenreService
 {
     /// <summary>Довідник жанрів — з кешу (рідко змінюється).</summary>
     public Task<IReadOnlyList<GenreDto>> GetAllAsync(CancellationToken ct)
-        => cache.GetOrCreateAsync(CacheKeys.Genres, async token =>
+        => cache.GetOrCreateAsync(CacheKeys.Genres, CachePolicy.Reference, async token =>
         {
             var genres = await uow.Genres.GetAllAsync(token);
             return (IReadOnlyList<GenreDto>)mapper.Map<List<GenreDto>>(genres.OrderBy(g => g.Name));
@@ -52,7 +52,7 @@ public sealed class GenreService(IUnitOfWork uow, IMapper mapper, CatalogCache c
         var genre = new Genre(name, input.Slug);
         await uow.Genres.AddAsync(genre, ct);
         await uow.SaveChangesAsync(ct);
-        cache.Invalidate(CacheKeys.Genres);
+        await cache.InvalidateAsync("GenreCreated", ct, CacheKeys.Genres);
 
         logger.LogInformation("Genre {GenreId} '{GenreName}' created", genre.Id, genre.Name);
         return mapper.Map<GenreDto>(genre);

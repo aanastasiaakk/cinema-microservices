@@ -7,6 +7,7 @@
 * **Лаб. 03:** мікросервіс каталогу `Services/Catalog`: тришарова архітектура на EF Core (Code First, Fluent API, міграції, Generic Repository + Unit of Work, Specification pattern, FluentValidation, Serilog)
 * **Лаб. 04:** мікросервіс відгуків `Services/Reviews`: Clean Architecture (Domain / Application / Infrastructure / WebApi), CQRS на MediatR з pipeline behaviors, MongoDB (BsonClassMap, оптимістична конкурентність, індекси, сідінг)
 * **Лаб. 05:** платформа на .NET Aspire: `Platform.ServiceDefaults` (Serilog, OpenTelemetry, CorrelationId), API Gateway на YARP (`Platform.ApiGateway`, **http://localhost:5050**), `Platform.Aggregator` (картка бронювання з трьох сервісів), див. [розділ 14](#14-лаб-05-мікросервісна-платформа-на-net-aspire-yarp-gateway-aggregator-opentelemetry-serilog)
+* **Лаб. 06:** gRPC-API в усіх сервісах (`Protos/*.proto`, `Grpc/`), Aggregator на gRPC з кешем у Redis, дворівневий кеш каталогу L1 (пам'ять) → L2 (Redis), метрики `cache.hits`/`cache.misses`, див. [розділ 15](#15-лаб-06-grpc-між-сервісами-і-дворівневе-кешування-memory--redis)
 
 ## Швидкий старт: уся платформа однією командою (.NET Aspire)
 
@@ -76,8 +77,8 @@ Services/
     Bookings.Domain/       моделі, доменні винятки
     Bookings.Tests/        unit, integration і API-тести
   Catalog/                 Проєкт №2: мікросервіс каталогу (EF Core Code First)
-    Catalog.Api/           контролери, middleware, Program.cs, appsettings*.json, Dockerfile
-    Catalog.Bll/           сервіси, DTO, профілі AutoMapper, Validation/, Specifications/, Caching/
+    Catalog.Api/           контролери, middleware, Program.cs, appsettings*.json, Dockerfile, Protos/catalog.proto, Grpc/
+    Catalog.Bll/           сервіси, DTO, профілі AutoMapper, Validation/, Specifications/, Caching/ (L1 → L2 → БД)
     Catalog.Dal/           DbContext, Configurations/, Migrations/, Repositories/, Seeding/, Unit of Work
     Catalog.Domain/        сутності з бізнес-правилами, доменні винятки
     Catalog.Tests/         unit-тести (домен, специфікації, валідатори) і integration-тести на SQL Server
@@ -890,3 +891,121 @@ dotnet test Platform.Tests
 * [02-trace-aggregator.jpg](docs/lab05/02-trace-aggregator.jpg): trace агрегувального запиту: Gateway → Aggregator → сервіси → SQL і MongoDB, паралельні виклики.
 * [03-structured-logs-by-correlation-id.jpg](docs/lab05/03-structured-logs-by-correlation-id.jpg): Structured logs з фільтром за одним CorrelationId, де видно логи gateway, aggregator і трьох сервісів.
 * [04-partial-failure.png](docs/lab05/04-partial-failure.png): часткова відповідь Aggregator при зупиненому reviews-api.
+
+## 15. Лаб. 06: gRPC між сервісами і дворівневе кешування (Memory + Redis)
+
+Платформа з Лаб. 05 отримала дві можливості. Перша — кеш каталогу L1 (пам'ять) → L2 (Redis) → БД з інвалідацією після запису. Друга — gRPC-API в усіх трьох сервісах: Aggregator тепер звертається до них через gRPC і кешує зібрану картку в Redis.
+
+### 15.1. Інфраструктура
+
+* **AppHost:** `AddRedis("redis").WithDataVolume("cinema-redis-data")` з persistent-контейнером. `catalog-api` і `aggregator` отримують `WithReference(redis).WaitFor(redis)`, тож рядок підключення приходить як `ConnectionStrings:redis`. Без Aspire сервіси використовують `AddDistributedMemoryCache()`.
+* **gRPC без TLS:** у кожного сервісу два endpoint-и Kestrel (`Kestrel:Endpoints` в `appsettings.json`): `http` (HTTP/1.1 для REST, Swagger і Gateway) та `grpc` (лише HTTP/2, h2c). Aspire бачить обидва й призначає їм порти (`Kestrel__Endpoints__grpc__Url`), а service discovery знаходить gRPC-endpoint за адресою `http://_grpc.<ресурс>`.
+
+| Сервіс | `.proto` (GrpcServices="Server") | gRPC-сервіс | RPC |
+|---|---|---|---|
+| bookings-api | `Services/Bookings/Bookings.Api/Protos/booking.proto` | `Grpc/BookingGrpcService.cs` | `GetBooking`, `GetCustomer` |
+| catalog-api | `Services/Catalog/Catalog.Api/Protos/catalog.proto` | `Grpc/CatalogGrpcService.cs` | `GetMovie`, `GetShowtime`, `GetShowtimesByIds` |
+| reviews-api | `Services/Reviews/Reviews.WebApi/Protos/reviews.proto` | `Grpc/ReviewsGrpcService.cs` | `GetMovieRating`, `GetLatestReviews` |
+
+`Platform.Aggregator.csproj` підключає ті самі три файли з `GrpcServices="Client"`.
+
+### 15.2. Контракти Protocol Buffers
+
+`proto3`, `package cinema.<домен>.v1`, `option csharp_namespace`. Коментарі потрапляють у згенерований код. Гроші передаються як `DecimalValue { units, nanos }` без втрати точності, час — як `google.protobuf.Timestamp`, рейтинг-розподіл — як `map<int32,int32>`. Номери полів після публікації не змінюються. Дані, які Aggregator не потребує, у контракт не потрапили: клієнт віддає лише `full_name`, без email і телефону.
+
+### 15.3. gRPC-сервіси (адаптери над BLL)
+
+* Наслідують згенерований `*ServiceBase` і викликають ті самі сервіси BLL (або `ISender` у Reviews), що й REST-контролери. Тому кеш і MediatR-pipeline працюють для обох протоколів без дублювання коду.
+* Вхідні дані валідуються: `id <= 0` та `take` поза 1–20 дають `INVALID_ARGUMENT`. Доменні винятки перетворюються на `RpcException`: `NotFound` → `NOT_FOUND`, помилки валідації → `INVALID_ARGUMENT`, конфлікти й бізнес-правила → `FAILED_PRECONDITION`. Загального `Internal` немає.
+* Реєстрація: `AddGrpc(o => o.Interceptors.Add<GrpcLoggingInterceptor>())`, `MapGrpcService<…>()`. `CancellationToken` береться з `ServerCallContext`.
+
+### 15.4. Кешування в Catalog (`Services/Catalog/Catalog.Bll/Caching/`)
+
+* **L1 — IMemoryCache** (`Program.cs`): `AddMemoryCache(o => { o.SizeLimit = 10_000; o.CompactionPercentage = 0.25; })`. Кожен запис має `Size` (≈ КБ серіалізованого DTO), `SlidingExpiration`, `AbsoluteExpirationRelativeToNow` і пріоритет (довідники мають `High`).
+* **L2 — Redis** через `IDistributedCache` (`builder.AddRedisDistributedCache("redis")`, Aspire-інтеграція з retry, health check і трасуванням). DTO серіалізуються System.Text.Json, ключі мають префікс сервісу.
+* **`TwoLevelCache`** реалізує cache-aside **L1 → L2 → БД**. Рівні заповнюються на зворотному шляху (БД → L2 → L1, або L2 → L1). Кожне звернення логується (hit / miss із ключем, розміром і TTL).
+* **Ключі й TTL** (`CacheKeys`, `CachePolicy`). L1 завжди коротший за L2:
+
+| Ключ | Дані | L1 (sliding / absolute) | L2 |
+|---|---|---|---|
+| `catalog:movie:{id}` | картка фільму (REST `GET /api/movies/{id}`, gRPC `GetMovie`) | 2 / 5 хв | 30 хв |
+| `catalog:showtime:{id}` | сеанс (`GET /api/showtimes/{id}`, `GetShowtime`, `GetShowtimesByIds`) | 1 / 2 хв | 10 хв |
+| `catalog:genres`, `catalog:halls` | довідники | 10 хв | 1 год |
+
+* **Інвалідація** відбувається синхронно, одразу після `SaveChangesAsync`: ключ видаляється з L1 і L2, причина логується (`Cache invalidated {CacheKeys}, reason {Reason}`). Причини: `MoviePriceChanged`, `MovieDeactivated`, `MovieActivated`, `MovieGenreAdded`, `MovieGenreRemoved`, `MovieDeleted` → `catalog:movie:{id}`; `ShowtimeScheduled` → картка фільму; `ShowtimeCancelled` → сеанс і картка фільму; `GenreCreated` → `catalog:genres`.
+* **Redis недоступний:** сервіс працює далі. Перша операція з L2 чекає таймаут (≈ 2 с), після чого L2 оминається 30 с, а дані беруться з L1 і БД.
+
+### 15.5. Aggregator на gRPC (`Platform.Aggregator`)
+
+* `AddGrpcClient<BookingService.BookingServiceClient>(o => o.Address = new("http://_grpc.bookings-api"))` і так само для catalog та reviews. Клієнти створюються тією ж фабрикою HttpClient, тож діють налаштування ServiceDefaults: service discovery, стійкість і `CorrelationIdHandler`, через який `X-Correlation-Id` потрапляє в метадані gRPC.
+* `Grpc/GrpcBookingCardSource.cs` виконує gRPC-виклики з `deadline` (3 с) і `CancellationToken`. `NOT_FOUND` перетворюється на `null`. Сеанси бронювання беруться **одним** пакетним `GetShowtimesByIds` замість N REST-запитів.
+* `Services/BookingCardAggregator.cs` робить паралельні виклики через `Task.WhenAll`. `RpcException` зі статусом `Unavailable`, `DeadlineExceeded`, `Internal`, `Unknown` чи `ResourceExhausted` перетворюється на попередження у `warnings` і відповідь 200 без помилки 500. Недоступний bookings-api дає 503.
+* **Кеш агрегованої відповіді** (`Caching/AggregatedResponseCache.cs`): ключ `aggregator:booking:{id}:full:{transport}`. Redis перевіряється **до** gRPC-викликів, TTL 30 с (коротший за кеші сервісів). Часткові відповіді не кешуються. Заголовок `X-Aggregator-Cache` показує `HIT`, `MISS` або `BYPASS`, а `Cache-Control: no-cache` змушує оминути кеш.
+* `?transport=http` вмикає HTTP-шлях із Лаб. 05 (typed HttpClients). Він залишений для порівняння затримок.
+
+### 15.6. Обсервабіліті
+
+* **Трасування:** клієнтські gRPC-виклики трасує HttpClient-інструментація, серверні — ASP.NET Core. В одному trace видно ланцюжок `gateway → aggregator → POST /cinema.booking.v1.BookingService/GetBooking (bookings-api) → SQL`, `GetShowtimesByIds`, `GetMovie` (catalog-api, з кешу без SQL) і `GetLatestReviews → aggregate reviews (MongoDB)`. Команди Redis трасує сама Aspire-інтеграція (`HMGET`, `HMSET`, `EXPIRE`).
+* **Логування gRPC:** `Platform.ServiceDefaults/GrpcLoggingInterceptor.cs` (серверний interceptor) пише `gRPC {GrpcMethod} from {GrpcPeer}: {GrpcStatus} in {ElapsedMs} ms`. `RpcException` логується як Warning зі статусом, неочікувані помилки — як Error зі stack trace. Внутрішні Debug-логи бібліотеки Grpc приглушено.
+* **Метрики кешу:** Meter `Cinema.Cache` (підключено в ServiceDefaults через `AddMeter`) має лічильники `cache.hits` і `cache.misses` з тегами `cache.level` (`L1` | `L2`) та `cache.name`, а також `cache.invalidations` з причиною. Hit ratio рахується як hits / (hits + misses) для кожного рівня. Метрики видно в Dashboard → Metrics → catalog-api / aggregator → `Cinema.Cache`.
+
+### 15.7. Порівняння HTTP (Лаб. 05) і gRPC (Лаб. 06)
+
+Виміряно на одному Mac під Aspire. Картка бронювання №1 запитувалася 50 разів поспіль після прогріву, з `Cache-Control: no-cache`, тобто без кешу агрегатора. Кеші сервісів при цьому теплі.
+
+| Шлях | Медіана | Середнє | p90 |
+|---|---|---|---|
+| Aggregator напряму, HTTP REST (Лаб. 05) | 11.3 мс | 11.5 мс | 12.6 мс |
+| Aggregator напряму, gRPC (Лаб. 06) | 12.2 мс | 12.2 мс | 13.6 мс |
+| Через Gateway, HTTP REST | 11.1 мс | 11.3 мс | 12.3 мс |
+| Через Gateway, gRPC | 11.9 мс | 12.4 мс | 12.8 мс |
+| Через Gateway, **кеш агрегатора в Redis (HIT)** | **2.7 мс** | 3.0 мс | 3.4 мс |
+| Aggregator напряму, кеш агрегатора (HIT) | 2.4 мс | 2.6 мс | 2.8 мс |
+
+**Висновок.** На localhost gRPC і HTTP REST майже однакові: у цьому вимірі gRPC навіть на ≈ 1 мс повільніший. Мережа тут не вузьке місце, дані малі, сервіси відповідають з кешу, а HTTP/1.1 keep-alive теж перевикористовує з'єднання. Переваги gRPC проявляються інакше. У картці з кількома сеансами gRPC робить **один** пакетний виклик `GetShowtimesByIds` замість N REST-запитів. Контракти типізовані й генеруються. HTTP/2 мультиплексує паралельні виклики через одне з'єднання, що відчутно з реальною мережевою затримкою і великими payload. Найбільший виграш у часі тут дає **кешування**: зібрана картка з Redis віддається приблизно **в 4–5 разів швидше**, а повторне читання фільму з L1 займає менше 1 мс без жодного SQL-запиту (див. знімки нижче).
+
+Повторити вимірювання:
+
+```bash
+for t in http grpc; do
+  for i in $(seq 1 50); do curl -s -o /dev/null -w "%{time_total}\n" -H "Cache-Control: no-cache" \
+    "http://localhost:5050/api/aggregator/bookings/1/full?transport=$t"; done > lat-$t.txt
+done
+```
+
+### 15.8. Перевірка
+
+```bash
+GW=http://localhost:5050
+
+# 1) повторне читання без SQL: другий запит обслуговує L1 (у Traces немає SQL-span)
+curl $GW/api/movies/3; curl $GW/api/movies/3
+
+# 2) інвалідація: після PUT наступний GET повертає нову ціну
+curl -X PUT $GW/api/movies/3/price -H "Content-Type: application/json" -d '{"price":225}'
+curl $GW/api/movies/3
+
+# 3) Aggregator на gRPC з кешем: перший запит MISS, другий HIT (заголовок X-Aggregator-Cache)
+curl -i $GW/api/aggregator/bookings/1/full
+curl -i $GW/api/aggregator/bookings/1/full
+
+# 4) неіснуюче бронювання: bookings-api повертає gRPC NOT_FOUND, Aggregator — 404
+curl -i -H "Cache-Control: no-cache" $GW/api/aggregator/bookings/999999/full
+```
+
+* **Redis зупинено** (`docker stop` контейнера redis або Stop у Dashboard): сервіси відповідають 200. Лише перший запит повільніший, бо чекає таймаут, далі L2 оминається.
+* **reviews-api зупинено:** картка повертає 200 з `warnings` і не кешується.
+* **Зміна номера поля в .proto лише на сервері** (самоперевірка з методички): очікувано клієнт перестає коректно читати це поле. Воно приходить під іншим номером і ігнорується, бо бінарний формат визначають номери, а не імена. Після перевірки номер треба повернути.
+
+### 15.9. Тести
+
+* `Platform.Tests/GrpcAggregatorTests` перевіряє Aggregator проти фейкових gRPC-сервісів (ті самі `.proto` з `GrpcServices="Server"`, TestServer). Повна картка будується одним пакетним викликом для сеансів. `X-Correlation-Id` передається в метаданих кожного gRPC-виклику. `UNAVAILABLE` дає 200 з попередженням, і часткова відповідь не кешується. Повна відповідь кешується, і другий запит не робить жодного gRPC-виклику. `NOT_FOUND` дає 404, недоступний bookings-api — 503.
+* `Platform.Tests/AggregatorTests` перевіряє той самий сценарій для HTTP-транспорту (`?transport=http`).
+* `Catalog.Tests/TwoLevelCacheTests` перевіряє дворівневий кеш. Cache-aside звертається до БД один раз. L2 заповнює L1 іншого екземпляра. Інвалідація чистить обидва рівні. Коли Redis недоступний, сервіс переходить на БД і перестає звертатися до Redis. TTL L1 коротший за L2.
+
+### 15.10. Знімки екрана для здачі (`docs/lab06/`)
+
+* [01-trace-cache-miss-sql.jpg](docs/lab06/01-trace-cache-miss-sql.jpg): перший запит фільму: Redis `HMGET` (miss) → SQL → `HMSET` / `EXPIRE` (заповнення L2).
+* [02-trace-repeat-no-sql.jpg](docs/lab06/02-trace-repeat-no-sql.jpg): **повторний запит без SQL-span** (L1, < 1 мс).
+* [03-trace-aggregator-grpc.jpg](docs/lab06/03-trace-aggregator-grpc.jpg): trace агрегувального запиту з gRPC-spans клієнта й сервера, SQL, MongoDB і записом картки в Redis.
+* [04-metric-cache-hits.jpg](docs/lab06/04-metric-cache-hits.jpg): метрика `cache.hits` з тегами `cache.level` L1/L2 і `cache.name`.

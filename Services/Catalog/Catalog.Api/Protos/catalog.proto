@@ -1,0 +1,72 @@
+// Контракт каталогу для внутрішніх сервісів (Aggregator). Лише читання.
+// Номери полів НЕ змінюються після публікації: саме вони визначають бінарний формат.
+syntax = "proto3";
+
+option csharp_namespace = "Catalog.Grpc";
+
+package cinema.catalog.v1;
+
+import "google/protobuf/timestamp.proto";
+
+// Читання фільмів і сеансів (дані беруться через дворівневий кеш L1 → L2 → БД).
+service CatalogService {
+  // Картка фільму. NOT_FOUND, якщо фільму немає; INVALID_ARGUMENT, якщо id <= 0.
+  rpc GetMovie (GetMovieRequest) returns (MovieReply);
+  // Один сеанс разом із назвою фільму і залу.
+  rpc GetShowtime (GetShowtimeRequest) returns (ShowtimeReply);
+  // Кілька сеансів одним викликом (наприклад, усі сеанси одного бронювання). Відсутні Id пропускаються.
+  rpc GetShowtimesByIds (GetShowtimesByIdsRequest) returns (ShowtimesReply);
+}
+
+// Гроші без втрати точності: units + nanos (як google.type.Money без валюти).
+message DecimalValue {
+  int64 units = 1;   // ціла частина
+  int32 nanos = 2;   // дробова частина × 10^9
+}
+
+message GetMovieRequest {
+  int64 id = 1;
+}
+
+message GetShowtimeRequest {
+  int64 id = 1;
+}
+
+message GetShowtimesByIdsRequest {
+  repeated int64 ids = 1;
+}
+
+message GenreReply {
+  int32 id = 1;
+  string name = 2;
+  bool is_primary = 3;
+}
+
+message MovieReply {
+  int64 id = 1;
+  string title = 2;
+  int32 release_year = 3;
+  int32 duration_min = 4;
+  string age_rating = 5;       // "0+", "6+", "12+", "16+", "18+"
+  DecimalValue base_price = 6;
+  bool is_active = 7;
+  string director = 8;         // порожній рядок, якщо невідомо
+  string country = 9;
+  repeated GenreReply genres = 10;
+}
+
+message ShowtimeReply {
+  int64 id = 1;
+  int64 movie_id = 2;
+  string movie_title = 3;
+  int32 hall_id = 4;
+  string hall_name = 5;
+  google.protobuf.Timestamp starts_at = 6;   // локальний час кінотеатру, переданий як UTC-«настінний» час
+  DecimalValue price = 7;
+  string language = 8;          // "uk" | "en"
+  bool is_cancelled = 9;
+}
+
+message ShowtimesReply {
+  repeated ShowtimeReply showtimes = 1;
+}

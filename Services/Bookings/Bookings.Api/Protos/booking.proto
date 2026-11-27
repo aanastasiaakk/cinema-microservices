@@ -1,0 +1,54 @@
+// Контракт бронювань для внутрішніх сервісів (Aggregator). Лише читання.
+syntax = "proto3";
+
+option csharp_namespace = "Bookings.Grpc";
+
+package cinema.booking.v1;
+
+import "google/protobuf/timestamp.proto";
+
+service BookingService {
+  // Бронювання з квитками. NOT_FOUND, якщо його немає (або воно видалене).
+  rpc GetBooking (GetBookingRequest) returns (BookingReply);
+  // Мінімальні дані клієнта для картки: без email і телефону.
+  rpc GetCustomer (GetCustomerRequest) returns (CustomerReply);
+}
+
+message DecimalValue {
+  int64 units = 1;
+  int32 nanos = 2;
+}
+
+message GetBookingRequest {
+  int64 id = 1;
+}
+
+message GetCustomerRequest {
+  int64 id = 1;
+}
+
+message TicketReply {
+  int64 showtime_id = 1;
+  string movie_title = 2;                     // знімок на момент бронювання
+  google.protobuf.Timestamp starts_at = 3;
+  int32 seat_row = 4;
+  int32 seat_number = 5;
+  string ticket_type = 6;                     // Adult | Student | Child
+  DecimalValue unit_price = 7;
+}
+
+message BookingReply {
+  int64 id = 1;
+  int64 customer_id = 2;
+  string booking_code = 3;
+  string status = 4;                          // Created | AwaitingPayment | Paid | CheckedIn | Cancelled
+  DecimalValue total_amount = 5;
+  google.protobuf.Timestamp booked_at = 6;
+  string channel = 7;
+  repeated TicketReply tickets = 8;
+}
+
+message CustomerReply {
+  int64 id = 1;
+  string full_name = 2;
+}

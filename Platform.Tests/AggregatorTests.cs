@@ -9,7 +9,7 @@ using Microsoft.Extensions.DependencyInjection;
 
 namespace Platform.Tests;
 
-/// <summary>Aggregator на заглушках сервісів (service discovery через конфігурацію, без Aspire і Docker).</summary>
+/// <summary>Aggregator, транспорт HTTP (Лаб. 05), на заглушках REST-сервісів (service discovery через конфігурацію).</summary>
 public sealed class AggregatorTests
 {
     private sealed class StubServices : HttpMessageHandler
@@ -91,7 +91,7 @@ public sealed class AggregatorTests
     public async Task Full_card_combines_three_services()
     {
         var (client, stub) = Create();
-        var json = await GetJsonAsync(client, "/api/aggregator/bookings/1/full", HttpStatusCode.OK);
+        var json = await GetJsonAsync(client, "/api/aggregator/bookings/1/full?transport=http", HttpStatusCode.OK);
 
         Assert.Equal("BA000001", json.GetProperty("booking").GetProperty("code").GetString());
         Assert.Equal("Олена Коваль", json.GetProperty("customer").GetProperty("fullName").GetString());
@@ -111,7 +111,7 @@ public sealed class AggregatorTests
         var (client, stub) = Create();
         stub.Down.Add("reviews.test");
 
-        var json = await GetJsonAsync(client, "/api/aggregator/bookings/1/full", HttpStatusCode.OK);
+        var json = await GetJsonAsync(client, "/api/aggregator/bookings/1/full?transport=http", HttpStatusCode.OK);
 
         var session = json.GetProperty("sessions")[0];
         Assert.True(session.TryGetProperty("movie", out _));                               // каталог є
@@ -126,7 +126,7 @@ public sealed class AggregatorTests
         var (client, stub) = Create();
         stub.Down.Add("catalog.test");
 
-        var json = await GetJsonAsync(client, "/api/aggregator/bookings/1/full", HttpStatusCode.OK);
+        var json = await GetJsonAsync(client, "/api/aggregator/bookings/1/full?transport=http", HttpStatusCode.OK);
 
         var session = json.GetProperty("sessions")[0];
         Assert.Equal("Дюна", session.GetProperty("movieTitle").GetString());              // знімок із квитка
@@ -138,16 +138,16 @@ public sealed class AggregatorTests
     public async Task Bookings_down_is_503_and_unknown_booking_is_404()
     {
         var (client, stub) = Create();
-        await GetJsonAsync(client, "/api/aggregator/bookings/999/full", HttpStatusCode.NotFound);
+        await GetJsonAsync(client, "/api/aggregator/bookings/999/full?transport=http", HttpStatusCode.NotFound);
         stub.Down.Add("bookings.test");
-        await GetJsonAsync(client, "/api/aggregator/bookings/1/full", HttpStatusCode.ServiceUnavailable);
+        await GetJsonAsync(client, "/api/aggregator/bookings/1/full?transport=http", HttpStatusCode.ServiceUnavailable);
     }
 
     [Fact]
     public async Task CorrelationId_is_returned_and_forwarded_to_every_service()
     {
         var (client, stub) = Create();
-        var request = new HttpRequestMessage(HttpMethod.Get, "/api/aggregator/bookings/1/full");
+        var request = new HttpRequestMessage(HttpMethod.Get, "/api/aggregator/bookings/1/full?transport=http");
         request.Headers.Add("X-Correlation-Id", "test-correlation-42");
 
         var response = await client.SendAsync(request);

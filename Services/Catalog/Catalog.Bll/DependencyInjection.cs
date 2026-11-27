@@ -17,8 +17,9 @@ public static class DependencyInjection
         services.AddScoped<IGenreService, GenreService>();
         services.AddScoped<IShowtimeService, ShowtimeService>();
 
-        services.AddMemoryCache();
-        services.AddSingleton<CatalogCache>();
+        // IMemoryCache (з SizeLimit) і IDistributedCache (Redis) реєструє хост — Program.cs Catalog.Api
+        services.AddSingleton<CatalogCacheMetrics>();
+        services.AddSingleton<ITwoLevelCache, TwoLevelCache>();
         services.AddSingleton(TimeProvider.System);
 
         // усі профілі BLL — централізовано однією збіркою
